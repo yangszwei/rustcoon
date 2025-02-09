@@ -1,6 +1,7 @@
 mod common;
 mod config;
 mod studies;
+mod utils;
 
 use crate::common::database;
 use crate::config::AppConfig;
