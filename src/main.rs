@@ -1,5 +1,6 @@
 mod common;
 mod config;
+mod studies;
 
 use crate::common::database;
 use crate::config::AppConfig;
@@ -17,6 +18,7 @@ struct AppState {
 
 fn app(state: AppState) -> Router {
     Router::new()
+        .merge(studies::routes())
         .layer(CorsLayer::permissive())
         .layer(DefaultBodyLimit::max(state.config.server.max_upload_size))
         .layer(TraceLayer::new_for_http())
