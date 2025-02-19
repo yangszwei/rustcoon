@@ -4,7 +4,7 @@ use crate::studies::models::series;
 use crate::studies::models::series::{SearchSeriesDto, SeriesDto};
 use crate::studies::models::study::SearchStudyDto;
 use crate::studies::services::search::study::read_dicom_study;
-use crate::studies::services::search::{read_dicom_object, retrieve_url};
+use crate::studies::services::utils::{read_dicom_object, retrieve_url};
 use crate::utils::dicom::{element_to_str, Json};
 use dicom::core::{PrimitiveValue, VR};
 use dicom::dictionary_std::tags;

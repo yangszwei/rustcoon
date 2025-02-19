@@ -2,7 +2,7 @@ use crate::config::AppConfig;
 use crate::studies::error::StudiesServiceError;
 use crate::studies::models::study;
 use crate::studies::models::study::{SearchStudyDto, StudyDto};
-use crate::studies::services::search::{read_dicom_object, retrieve_url};
+use crate::studies::services::utils::{read_dicom_object, retrieve_url};
 use crate::utils::dicom::{element_to_str, Json};
 use dicom::core::{PrimitiveValue, VR};
 use dicom::dictionary_std::tags;
