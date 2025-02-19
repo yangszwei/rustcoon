@@ -32,3 +32,47 @@ CREATE TABLE IF NOT EXISTS sop_instances
 );
 
 CREATE INDEX IF NOT EXISTS idx_sop_instances_created_at ON sop_instances (created_at);
+
+CREATE VIEW IF NOT EXISTS studies_view AS
+WITH ranked_instances AS
+         (SELECT instances.study_instance_uid,
+                 instances.sop_instance_uid,
+                 instances.path,
+                 ROW_NUMBER() OVER (PARTITION BY instances.study_instance_uid
+                     ORDER BY instances.instance_number, instances.created_at) AS rn
+          FROM sop_instances instances)
+SELECT
+    -- Study columns
+    studies.*,
+    -- Modalities in the study
+    ',' || GROUP_CONCAT(DISTINCT series.modality) || ','              AS modalities_in_study,
+    -- Number of series in the study
+    COUNT(DISTINCT series.series_instance_uid)                        AS number_of_study_related_series,
+    -- Number of instances in the study
+    COUNT(DISTINCT ranked_instances.sop_instance_uid)                 AS number_of_study_related_instances,
+    -- Path of the SOP instance with the smallest instance_number (or created_at if equal)
+    MIN(ranked_instances.path) FILTER (WHERE ranked_instances.rn = 1) AS path
+FROM studies
+         LEFT JOIN study_series series
+                   ON series.study_instance_uid = studies.study_instance_uid
+         LEFT JOIN ranked_instances ON ranked_instances.study_instance_uid = studies.study_instance_uid
+GROUP BY studies.study_instance_uid;
+
+CREATE VIEW IF NOT EXISTS study_series_view AS
+WITH ranked_instances AS
+         (SELECT instances.series_instance_uid,
+                 instances.sop_instance_uid,
+                 instances.path,
+                 ROW_NUMBER() OVER (PARTITION BY instances.series_instance_uid
+                     ORDER BY instances.instance_number, instances.created_at) AS rn
+          FROM sop_instances instances)
+SELECT
+    -- Series columns
+    series.*,
+    -- Number of instances in the series
+    COUNT(DISTINCT ranked_instances.sop_instance_uid)                 AS number_of_series_related_instances,
+    -- Path of the instance with the smallest instance_number (or created_at if equal)
+    MIN(ranked_instances.path) FILTER (WHERE ranked_instances.rn = 1) AS path
+FROM study_series series
+         LEFT JOIN ranked_instances ON ranked_instances.series_instance_uid = series.series_instance_uid
+GROUP BY series.series_instance_uid;
