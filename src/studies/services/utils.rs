@@ -1,9 +1,30 @@
 use crate::config::AppConfig;
 use crate::studies::error::StudiesServiceError;
+use crate::studies::models::instance;
 use dicom::dictionary_std::tags;
 use dicom::object::file::ReadPreamble;
 use dicom::object::{DefaultDicomObject, OpenFileOptions};
 use std::path::PathBuf;
+
+/// Finds a list of instances that match the given filter.
+pub async fn find_instances(
+    db: &sqlx::AnyPool,
+    filter: &instance::SearchInstanceDto,
+) -> Result<Vec<instance::InstanceDto>, StudiesServiceError> {
+    let mut tx = db.begin().await?;
+    let filter = filter.clone();
+
+    // Find all SOP instances that match the filter
+    let sop_instances = instance::find(&mut tx, None, None, filter).await?;
+
+    tx.commit().await?;
+
+    if sop_instances.is_empty() {
+        return Err(StudiesServiceError::NotFound);
+    }
+
+    Ok(sop_instances)
+}
 
 /// Read DICOM objects from the file system.
 pub fn read_dicom_object(

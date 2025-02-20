@@ -9,6 +9,7 @@ bytes = "1.10.0"
 clap = { version = "4.5.28", features = ["derive", "env"] }
 dicom = { version = "0.8.1", default-features = false }
 dicom-json = "0.8.1"
+dicom-pixeldata = { version = "0.8.1", features = ["image", "jpeg", "jpegxl", "openjp2", "charls", "gdcm"] }
 dotenvy = "0.15.7"
 mime = "0.3.17"
 multer = "3.1.0"

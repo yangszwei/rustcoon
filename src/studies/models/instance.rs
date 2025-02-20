@@ -106,6 +106,19 @@ impl From<&HashMap<String, String>> for SearchInstanceDto {
 }
 
 impl SearchInstanceDto {
+    /// Creates a new instance of the filter with optional UIDs.
+    pub fn from_uids(
+        study_instance_uid: Option<String>,
+        series_instance_uid: Option<String>,
+        sop_instance_uid: Option<String>,
+    ) -> Self {
+        let mut self_ = Self::default();
+        self_.study_instance_uid = study_instance_uid;
+        self_.series_instance_uid = series_instance_uid;
+        self_.sop_instance_uid = sop_instance_uid;
+        self_
+    }
+
     pub fn with_studies(&mut self) -> &mut Self {
         self.include_study = true;
         self
