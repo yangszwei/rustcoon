@@ -26,14 +26,14 @@ pub async fn rendered(
         .join("image.dcm");
 
     // Check if the file exists
-    if let Err(_) = file_path.try_exists() {
+    if file_path.try_exists().is_err() {
         return Err(StudiesServiceError::NotFound);
     }
 
     render_dicom_image(file_path, frame.unwrap_or(0), false)
         .await
         .map(|image| Image("image/jpeg", image))
-        .map_err(|err| StudiesServiceError::DicomRenderError(err.into()))
+        .map_err(StudiesServiceError::DicomRenderError)
 }
 
 /// Renders an image representation for the parent DICOM resource matching the filter.
@@ -54,14 +54,14 @@ pub async fn thumbnail(
         .join("image.dcm");
 
     // Check if the file exists
-    if let Err(_) = file_path.try_exists() {
+    if file_path.try_exists().is_err() {
         return Err(StudiesServiceError::NotFound);
     }
 
     render_dicom_image(file_path, frame.unwrap_or(0), true)
         .await
         .map(|image| Image("image/jpeg", image))
-        .map_err(|err| StudiesServiceError::DicomRenderError(err.into()))
+        .map_err(StudiesServiceError::DicomRenderError)
 }
 
 /// Render a DICOM image from the given file path and frame number.

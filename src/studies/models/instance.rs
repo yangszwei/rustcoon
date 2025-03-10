@@ -112,11 +112,12 @@ impl SearchInstanceDto {
         series_instance_uid: Option<String>,
         sop_instance_uid: Option<String>,
     ) -> Self {
-        let mut self_ = Self::default();
-        self_.study_instance_uid = study_instance_uid;
-        self_.series_instance_uid = series_instance_uid;
-        self_.sop_instance_uid = sop_instance_uid;
-        self_
+        Self {
+            study_instance_uid,
+            series_instance_uid,
+            sop_instance_uid,
+            ..Self::default()
+        }
     }
 
     pub fn with_studies(&mut self) -> &mut Self {
@@ -246,8 +247,8 @@ impl InstanceDto {
 }
 
 /// Searches for instances in the database.
-pub async fn find<'c>(
-    tx: &mut sqlx::Transaction<'c, sqlx::Any>,
+pub async fn find(
+    tx: &mut sqlx::Transaction<'_, sqlx::Any>,
     search_study_dto: Option<SearchStudyDto>,
     search_series_dto: Option<SearchSeriesDto>,
     mut search_instance_dto: SearchInstanceDto,
@@ -292,8 +293,8 @@ pub async fn find<'c>(
 }
 
 /// Checks if a SOP instance exists in the database.
-pub async fn is_exist<'c>(
-    tx: &mut sqlx::Transaction<'c, sqlx::Any>,
+pub async fn is_exist(
+    tx: &mut sqlx::Transaction<'_, sqlx::Any>,
     sop_instance_uid: &str,
 ) -> Result<bool, sqlx::Error> {
     sqlx::query("SELECT sop_instance_uid FROM sop_instances WHERE sop_instance_uid = $1")
@@ -304,8 +305,8 @@ pub async fn is_exist<'c>(
 }
 
 /// Saves a SOP instance to the database.
-pub async fn save<'c>(
-    tx: &mut sqlx::Transaction<'c, sqlx::Any>,
+pub async fn save(
+    tx: &mut sqlx::Transaction<'_, sqlx::Any>,
     dto: &StoreInstanceDto,
 ) -> Result<sqlx::any::AnyQueryResult, sqlx::Error> {
     if is_exist(tx, &dto.sop_instance_uid).await? {
@@ -315,8 +316,8 @@ pub async fn save<'c>(
     }
 }
 
-pub async fn get_path_by_uid<'c>(
-    tx: &mut sqlx::Transaction<'c, sqlx::Any>,
+pub async fn get_path_by_uid(
+    tx: &mut sqlx::Transaction<'_, sqlx::Any>,
     sop_instance_uid: &str,
 ) -> Result<Option<String>, sqlx::Error> {
     sqlx::query("SELECT path FROM sop_instances WHERE sop_instance_uid = $1")

@@ -52,14 +52,14 @@ pub struct FailedSopInstance {
     pub failure_reason: String,
 }
 
-impl Into<InMemDicomObject> for FailedSopInstance {
+impl From<FailedSopInstance> for InMemDicomObject {
     /// Convert a `FailedSopInstance` into an `InMemDicomObject`.
     #[rustfmt::skip]
-    fn into(self) -> InMemDicomObject {
+    fn from(val: FailedSopInstance) -> Self {
         InMemDicomObject::from_element_iter(vec![
-            DataElement::new(tags::REFERENCED_SOP_CLASS_UID, VR::UI, self.sop_class_uid),
-            DataElement::new(tags::REFERENCED_SOP_INSTANCE_UID, VR::UI, self.sop_instance_uid),
-            DataElement::new(tags::FAILURE_REASON, VR::US, self.failure_reason),
+            DataElement::new(tags::REFERENCED_SOP_CLASS_UID, VR::UI, val.sop_class_uid),
+            DataElement::new(tags::REFERENCED_SOP_INSTANCE_UID, VR::UI, val.sop_instance_uid),
+            DataElement::new(tags::FAILURE_REASON, VR::US, val.failure_reason),
         ])
     }
 }
@@ -85,21 +85,21 @@ pub struct ReferencedSopInstance {
     pub warning_reason: Option<String>,
 }
 
-impl Into<InMemDicomObject> for ReferencedSopInstance {
+impl From<ReferencedSopInstance> for InMemDicomObject {
     /// Convert a `ReferencedSopInstance` into an `InMemDicomObject`.
     #[rustfmt::skip]
-    fn into(self) -> InMemDicomObject {
+    fn from(val: ReferencedSopInstance) -> Self {
         let mut sequence: Vec<DataElement<InMemDicomObject>> = vec![
-            DataElement::new(tags::REFERENCED_SOP_CLASS_UID, VR::UI, self.sop_class_uid),
-            DataElement::new(tags::REFERENCED_SOP_INSTANCE_UID, VR::UI, self.sop_instance_uid),
-            DataElement::new(tags::RETRIEVE_URL, VR::UR, self.retrieve_url),
+            DataElement::new(tags::REFERENCED_SOP_CLASS_UID, VR::UI, val.sop_class_uid),
+            DataElement::new(tags::REFERENCED_SOP_INSTANCE_UID, VR::UI, val.sop_instance_uid),
+            DataElement::new(tags::RETRIEVE_URL, VR::UR, val.retrieve_url),
         ];
 
-        if let Some(warning_reason) = self.warning_reason {
+        if let Some(warning_reason) = val.warning_reason {
             sequence.push(DataElement::new(tags::WARNING_REASON, VR::LO, warning_reason));
         }
 
-        InMemDicomObject::from_element_iter(sequence.into_iter())
+        InMemDicomObject::from_element_iter(sequence)
     }
 }
 
@@ -109,12 +109,12 @@ pub struct OtherFailure {
     pub failure_reason: String,
 }
 
-impl Into<InMemDicomObject> for OtherFailure {
+impl From<OtherFailure> for InMemDicomObject {
     /// Convert an `OtherFailure` into an `InMemDicomObject`.
     #[rustfmt::skip]
-    fn into(self) -> InMemDicomObject {
+    fn from(val: OtherFailure) -> Self {
         InMemDicomObject::from_element_iter(vec![
-            DataElement::new(tags::FAILURE_REASON, VR::US, self.failure_reason),
+            DataElement::new(tags::FAILURE_REASON, VR::US, val.failure_reason),
         ])
     }
 }

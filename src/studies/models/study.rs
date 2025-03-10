@@ -295,8 +295,8 @@ impl StudyDto {
 }
 
 /// Searches for studies in the database.
-pub async fn find<'c>(
-    tx: &mut sqlx::Transaction<'c, sqlx::Any>,
+pub async fn find(
+    tx: &mut sqlx::Transaction<'_, sqlx::Any>,
     dto: SearchStudyDto,
 ) -> Result<Vec<StudyDto>, sqlx::Error> {
     dto.with_backend(tx.backend_name().to_string())
@@ -307,8 +307,8 @@ pub async fn find<'c>(
 }
 
 /// Checks if a study exists in the database.
-pub async fn is_exist<'c>(
-    tx: &mut sqlx::Transaction<'c, sqlx::Any>,
+pub async fn is_exist(
+    tx: &mut sqlx::Transaction<'_, sqlx::Any>,
     study_instance_uid: &str,
 ) -> Result<bool, sqlx::Error> {
     sqlx::query("SELECT study_instance_uid FROM studies WHERE study_instance_uid = $1;")
@@ -319,8 +319,8 @@ pub async fn is_exist<'c>(
 }
 
 /// Saves a study to the database.
-pub async fn save<'c>(
-    tx: &mut sqlx::Transaction<'c, sqlx::Any>,
+pub async fn save(
+    tx: &mut sqlx::Transaction<'_, sqlx::Any>,
     dto: &StoreStudyDto,
 ) -> Result<sqlx::any::AnyQueryResult, sqlx::Error> {
     if is_exist(tx, &dto.study_instance_uid).await? {

@@ -20,13 +20,13 @@ pub async fn metadata(
     let mut dicom_metadata = Vec::new();
 
     // Iterate over all SOP instances and read/parse each DICOM file
-    for sop_instance in find_instances(db, &filter).await? {
+    for sop_instance in find_instances(db, filter).await? {
         let file_path = PathBuf::from(&config.storage.path)
             .join(&sop_instance.path)
             .join("image.dcm");
 
         // Check if the file exists
-        if let Err(_) = file_path.try_exists() {
+        if file_path.try_exists().is_err() {
             return Err(StudiesServiceError::NotFound);
         }
 
@@ -39,7 +39,7 @@ pub async fn metadata(
             .map_err(|err| StudiesServiceError::FileReadFailure(err.into()))?;
 
         let dicom_json = dicom_json::to_value(filter_dicom_elements(&obj))
-            .map_err(|err| StudiesServiceError::DicomJsonError(err))?;
+            .map_err(StudiesServiceError::DicomJsonError)?;
 
         // Add the DICOM JSON to the metadata vector
         dicom_metadata.push(dicom_json);

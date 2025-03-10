@@ -12,16 +12,16 @@ pub fn routes() -> Router<AppState> {
         .route("/studies/{study_uid}", post(study))
 }
 
-async fn studies<'r>(State(state): State<AppState>, body: multipart::RelatedBody<'r>) -> Response {
+async fn studies(State(state): State<AppState>, body: multipart::RelatedBody<'_>) -> Response {
     store_sop_instances(state.config, &state.pool, None, body)
         .await
         .into_response()
 }
 
-async fn study<'r>(
+async fn study(
     State(state): State<AppState>,
     Path(study): Path<String>,
-    body: multipart::RelatedBody<'r>,
+    body: multipart::RelatedBody<'_>,
 ) -> Response {
     store_sop_instances(state.config, &state.pool, Some(&study), body)
         .await

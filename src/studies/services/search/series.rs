@@ -45,9 +45,7 @@ pub async fn series(
 
         read_dicom_series(&mut obj, config, &series)?;
 
-        result.push(
-            dicom_json::to_value(obj).map_err(|err| StudiesServiceError::DicomJsonError(err))?,
-        );
+        result.push(dicom_json::to_value(obj).map_err(StudiesServiceError::DicomJsonError)?);
     }
 
     tx.commit().await?;

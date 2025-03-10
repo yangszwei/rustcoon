@@ -36,7 +36,7 @@ pub fn read_dicom_object(
         .join("image.dcm");
 
     // Check if the file exists
-    if let Err(_) = file_path.try_exists() {
+    if file_path.try_exists().is_err() {
         return Err(StudiesServiceError::NotFound);
     }
 

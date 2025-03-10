@@ -15,10 +15,8 @@ pub async fn connect(url: String) -> Result<sqlx::AnyPool, sqlx::Error> {
 
     // sqlite - create database if it doesn't exist
     #[cfg(all(feature = "migrate", feature = "sqlite"))]
-    if url.starts_with("sqlite") {
-        if !sqlx::Sqlite::database_exists(url.as_str()).await? {
-            sqlx::Sqlite::create_database(url.as_str()).await?;
-        }
+    if url.starts_with("sqlite") && !sqlx::Sqlite::database_exists(url.as_str()).await? {
+        sqlx::Sqlite::create_database(url.as_str()).await?;
     }
 
     // set up connection pool

@@ -235,8 +235,8 @@ impl SeriesDto {
 }
 
 /// Searches for series in the database.
-pub async fn find<'c>(
-    tx: &mut sqlx::Transaction<'c, sqlx::Any>,
+pub async fn find(
+    tx: &mut sqlx::Transaction<'_, sqlx::Any>,
     search_study_dto: Option<SearchStudyDto>,
     mut search_series_dto: SearchSeriesDto,
 ) -> Result<Vec<SeriesDto>, sqlx::Error> {
@@ -267,8 +267,8 @@ pub async fn find<'c>(
 }
 
 /// Checks if a series exists in the database.
-pub async fn is_exist<'c>(
-    tx: &mut sqlx::Transaction<'c, sqlx::Any>,
+pub async fn is_exist(
+    tx: &mut sqlx::Transaction<'_, sqlx::Any>,
     series_instance_uid: &str,
 ) -> Result<bool, sqlx::Error> {
     sqlx::query("SELECT series_instance_uid FROM study_series WHERE series_instance_uid = $1;")
@@ -279,8 +279,8 @@ pub async fn is_exist<'c>(
 }
 
 /// Saves a series to the database.
-pub async fn save<'c>(
-    tx: &mut sqlx::Transaction<'c, sqlx::Any>,
+pub async fn save(
+    tx: &mut sqlx::Transaction<'_, sqlx::Any>,
     dto: &StoreSeriesDto,
 ) -> Result<sqlx::any::AnyQueryResult, sqlx::Error> {
     if is_exist(tx, &dto.series_instance_uid).await? {

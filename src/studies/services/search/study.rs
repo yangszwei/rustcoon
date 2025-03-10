@@ -42,11 +42,9 @@ pub async fn studies(
     for study in study::find(&mut tx, search_study_dto).await? {
         let mut obj = InMemDicomObject::new_empty();
 
-        read_dicom_study(&mut obj, &config, &study)?;
+        read_dicom_study(&mut obj, config, &study)?;
 
-        result.push(
-            dicom_json::to_value(obj).map_err(|err| StudiesServiceError::DicomJsonError(err))?,
-        );
+        result.push(dicom_json::to_value(obj).map_err(StudiesServiceError::DicomJsonError)?);
     }
 
     tx.commit().await?;

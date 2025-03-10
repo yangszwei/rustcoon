@@ -157,7 +157,7 @@ impl Related {
             if !self
                 .parts
                 .iter()
-                .any(|part| part.content_id.as_ref().map_or(false, |id| id == start))
+                .any(|part| part.content_id.as_ref() == Some(start))
             {
                 return Err(MultipartError::StartNotFound(start.clone()));
             }

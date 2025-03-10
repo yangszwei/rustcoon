@@ -16,11 +16,11 @@ use tokio::fs;
 use tokio::io::AsyncWriteExt;
 
 /// Store a set of DICOM part 10 instances in the database.
-pub async fn store_sop_instances<'r>(
+pub async fn store_sop_instances(
     config: AppConfig,
     db: &sqlx::AnyPool,
     study_uid: Option<&String>,
-    mut multipart: multipart::RelatedBody<'r>,
+    mut multipart: multipart::RelatedBody<'_>,
 ) -> Result<StoreInstancesResponse, StudiesServiceError> {
     let mut referenced_sop_sequence = Vec::new();
     let mut failed_sop_sequence = Vec::new();
@@ -51,7 +51,7 @@ pub async fn store_sop_instances<'r>(
 }
 
 /// Store a DICOM part 10 instance in the database.
-pub async fn store_sop_instance<'r>(
+pub async fn store_sop_instance(
     config: AppConfig,
     db: &sqlx::AnyPool,
     study_uid: Option<&String>,

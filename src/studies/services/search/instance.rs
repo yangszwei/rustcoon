@@ -60,9 +60,7 @@ pub async fn instances(
 
         read_dicom_instance(&mut obj, config, &instance)?;
 
-        result.push(
-            dicom_json::to_value(obj).map_err(|err| StudiesServiceError::DicomJsonError(err))?,
-        );
+        result.push(dicom_json::to_value(obj).map_err(StudiesServiceError::DicomJsonError)?);
     }
 
     tx.commit().await?;
