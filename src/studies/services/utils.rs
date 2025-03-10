@@ -54,7 +54,7 @@ pub fn retrieve_url(
     series_instance_uid: Option<String>,
     sop_instance_uid: Option<String>,
 ) -> String {
-    let mut url = config.server.origin.to_owned();
+    let mut url = config.server.origin();
     if let Some(study_uid) = study_instance_uid {
         url.push_str(&format!("/studies/{}", study_uid));
         if let Some(series_uid) = series_instance_uid {

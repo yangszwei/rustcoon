@@ -25,7 +25,7 @@ impl AppConfig {
 
     /// Get the database URL, or a default if not set.
     pub fn database_url(&self) -> String {
-        let mut database_url = self.database.url.clone();
+        let mut database_url = self.database.url.clone().unwrap_or_default();
 
         // default to sqlite if empty
         if database_url.is_empty() {
@@ -49,18 +49,40 @@ pub struct HttpServerConfig {
     pub port: u16,
 
     /// The origin of the server, used to construct URLs.
-    #[arg(long, env, default_value = "http://localhost:3000")]
-    pub origin: String,
+    #[arg(long, env)]
+    pub origin: Option<String>,
 
-    /// The maximum size of a file upload in bytes. Default is 4GiB.
-    #[arg(long, env, default_value_t = 4_294_967_296)]
-    pub max_upload_size: usize,
+    /// The maximum size of a file upload.
+    #[arg(long, env, default_value = "4GiB")]
+    pub max_upload_size: String,
 }
 
 impl HttpServerConfig {
     /// Get the address to listen on.
     pub fn addr(&self) -> String {
         format!("{}:{}", self.host, self.port)
+    }
+
+    /// Get the origin of the server.
+    pub fn origin(&self) -> String {
+        if let Some(origin) = &self.origin {
+            origin.clone()
+        } else {
+            let hostname = if self.host.is_empty() || self.host == "0.0.0.0" {
+                "127.0.0.1".to_string()
+            } else {
+                self.host.clone()
+            };
+
+            format!("http://{}:{}", hostname, self.port)
+        }
+    }
+
+    /// Get the maximum upload size in bytes.
+    pub fn max_upload_size(&self) -> usize {
+        parse_size::parse_size(&self.max_upload_size)
+            .map(|size| size as usize)
+            .unwrap_or_else(|e| panic!("Failed to parse max_upload_size: {}", e))
     }
 }
 
@@ -83,6 +105,6 @@ impl StorageConfig {
 #[derive(Args, Clone)]
 pub struct DatabaseConfig {
     /// The connection URL for the database.
-    #[arg(long = "database-url", env = "DATABASE_URL", default_value = "")]
-    pub url: String,
+    #[arg(long = "database-url", env = "DATABASE_URL")]
+    pub url: Option<String>,
 }

@@ -21,7 +21,7 @@ fn app(state: AppState) -> Router {
     Router::new()
         .merge(studies::routes())
         .layer(CorsLayer::permissive())
-        .layer(DefaultBodyLimit::max(state.config.server.max_upload_size))
+        .layer(DefaultBodyLimit::max(state.config.server.max_upload_size()))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }
@@ -55,6 +55,9 @@ async fn main() {
 
     // create the application state
     let state = AppState { config, pool };
+
+    // trace the server start
+    tracing::info!("Starting server at {}", state.config.server.origin());
 
     // run our app with hyper on tokio
     let listener = TcpListener::bind(state.config.server.addr()).await.unwrap();

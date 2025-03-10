@@ -141,7 +141,7 @@ fn common_retrieve_url(
     referenced_sop_instances: &[ReferencedSopInstance],
 ) -> String {
     if referenced_sop_instances.is_empty() {
-        return config.server.origin.clone();
+        return config.server.origin();
     }
 
     let first = &referenced_sop_instances[0];
@@ -151,7 +151,7 @@ fn common_retrieve_url(
             .all(|x| !f(x).is_empty() && f(x) == f(first))
     };
 
-    let mut url = config.server.origin.to_owned();
+    let mut url = config.server.origin();
     if common(|x| &x.study_instance_uid) {
         url.push_str(&format!("/studies/{}", first.study_instance_uid));
         if common(|x| &x.series_instance_uid) {
@@ -201,7 +201,7 @@ async fn retrieve_url(
 ) -> String {
     format!(
         "{}/studies/{}/series/{}/instances/{}",
-        config.server.origin,
+        config.server.origin(),
         study.study_instance_uid,
         series.series_instance_uid,
         instance.sop_instance_uid
