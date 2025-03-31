@@ -21,6 +21,12 @@ pub fn routes() -> Router<AppState> {
         .route("/studies/{study_uid}/series/{series_uid}/metadata", get(series_metadata))
         .route("/studies/{study_uid}/series/{series_uid}/instances/{instance_uid}/metadata", get(instance_metadata))
 
+        // PixelData Resources
+        .route("/studies/{study_uid}/pixeldata", get(study_pixeldata))
+        .route("/studies/{study_uid}/series/{series_uid}/pixeldata", get(series_pixeldata))
+        .route("/studies/{study_uid}/series/{series_uid}/instances/{instance_uid}/pixeldata", get(instance_pixeldata))
+        .route("/studies/{study_uid}/series/{series_uid}/instances/{instance_uid}/frames/{frame_index}/pixeldata", get(frame_pixeldata))
+
         // Rendered Resources
         .route("/studies/{study_uid}/rendered", get(rendered_study))
         .route("/studies/{study_uid}/series/{series_uid}/rendered", get(rendered_series))
@@ -88,6 +94,48 @@ async fn instance_metadata(
         SearchInstanceDto::from_uids(Some(study_uid), Some(series_uid), Some(instance_uid));
 
     retrieve::metadata(&state.config, &state.pool, &filter).await
+}
+
+async fn study_pixeldata(
+    State(state): State<AppState>,
+    Path(study_uid): Path<String>,
+) -> Result<multipart::Related, StudiesServiceError> {
+    let filter = SearchInstanceDto::from_uids(Some(study_uid), None, None);
+
+    retrieve::pixeldata(&state.config, &state.pool, &filter, None).await
+}
+
+async fn series_pixeldata(
+    State(state): State<AppState>,
+    Path((study_uid, series_uid)): Path<(String, String)>,
+) -> Result<multipart::Related, StudiesServiceError> {
+    let filter = SearchInstanceDto::from_uids(Some(study_uid), Some(series_uid), None);
+
+    retrieve::pixeldata(&state.config, &state.pool, &filter, None).await
+}
+
+async fn instance_pixeldata(
+    State(state): State<AppState>,
+    Path((study_uid, series_uid, instance_uid)): Path<(String, String, String)>,
+) -> Result<multipart::Related, StudiesServiceError> {
+    let filter =
+        SearchInstanceDto::from_uids(Some(study_uid), Some(series_uid), Some(instance_uid));
+
+    retrieve::pixeldata(&state.config, &state.pool, &filter, None).await
+}
+
+async fn frame_pixeldata(
+    State(state): State<AppState>,
+    Path((study_uid, series_uid, instance_uid, frame_index)): Path<(String, String, String, usize)>,
+) -> Result<multipart::Related, StudiesServiceError> {
+    let filter =
+        SearchInstanceDto::from_uids(Some(study_uid), Some(series_uid), Some(instance_uid));
+
+    let zero_based_index = frame_index
+        .checked_sub(1)
+        .ok_or_else(|| StudiesServiceError::Other("Frame number must be >= 1".into()))?;
+
+    retrieve::pixeldata(&state.config, &state.pool, &filter, Some(zero_based_index)).await
 }
 
 async fn rendered_study(
