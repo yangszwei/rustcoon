@@ -56,11 +56,11 @@ pub fn retrieve_url(
 ) -> String {
     let mut url = config.server.origin();
     if let Some(study_uid) = study_instance_uid {
-        url.push_str(&format!("/studies/{}", study_uid));
+        url.push_str(&format!("/studies/{study_uid}"));
         if let Some(series_uid) = series_instance_uid {
-            url.push_str(&format!("/series/{}", series_uid));
+            url.push_str(&format!("/series/{series_uid}"));
             if let Some(instance_uid) = sop_instance_uid {
-                url.push_str(&format!("/instances/{}", instance_uid));
+                url.push_str(&format!("/instances/{instance_uid}"));
             }
         }
     }

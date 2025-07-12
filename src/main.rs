@@ -40,18 +40,18 @@ async fn main() {
     // ensure the data directory exists
     tokio::fs::create_dir_all(&config.storage.path)
         .await
-        .unwrap_or_else(|e| panic!("Failed to create data directory: {}", e));
+        .unwrap_or_else(|e| panic!("Failed to create data directory: {e}"));
 
     // set up connection pool
     let pool = database::connect(config.database_url())
         .await
-        .unwrap_or_else(|e| panic!("Failed to connect to database: {}", e));
+        .unwrap_or_else(|e| panic!("Failed to connect to database: {e}"));
 
     // run database migrations
     #[cfg(feature = "migrate")]
     database::migrate(&pool)
         .await
-        .unwrap_or_else(|e| panic!("Failed to migrate database: {}", e));
+        .unwrap_or_else(|e| panic!("Failed to migrate database: {e}"));
 
     // create the application state
     let state = AppState { config, pool };

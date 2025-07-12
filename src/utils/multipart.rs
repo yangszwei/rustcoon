@@ -77,11 +77,11 @@ impl Part {
         ];
 
         if let Some(id) = &self.content_id {
-            headers.push(format!("Content-ID: <{}>", id));
+            headers.push(format!("Content-ID: <{id}>"));
         }
 
         if let Some(enc) = &self.encoding {
-            headers.push(format!("Content-Transfer-Encoding: {}", enc));
+            headers.push(format!("Content-Transfer-Encoding: {enc}"));
         }
 
         format!("{}\r\n\r\n", headers.join("\r\n"))
@@ -171,11 +171,11 @@ impl Related {
         let mut content_type = format!("multipart/related; boundary={}", self.config.boundary);
 
         if let Some(root_type) = &self.config.root_type {
-            content_type.push_str(&format!(r#"; type="{}""#, root_type));
+            content_type.push_str(&format!(r#"; type="{root_type}""#));
         }
 
         if let Some(start) = &self.config.start {
-            content_type.push_str(&format!(r#"; start="<{}>""#, start));
+            content_type.push_str(&format!(r#"; start="<{start}>""#));
         }
 
         content_type

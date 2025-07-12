@@ -32,7 +32,7 @@ fn extract_frames_from_raw_pixel_data(
         Some(index) => {
             if !offsets.is_empty() {
                 let start = *offsets.get(index).ok_or_else(|| {
-                    StudiesServiceError::Other(format!("Frame {} offset not found", index).into())
+                    StudiesServiceError::Other(format!("Frame {index} offset not found").into())
                 })? as usize;
 
                 let end = offsets
@@ -48,7 +48,7 @@ fn extract_frames_from_raw_pixel_data(
                 Ok(vec![slice])
             } else {
                 let frame = raw.fragments.get(index).ok_or_else(|| {
-                    StudiesServiceError::Other(format!("Frame {} not found", index).into())
+                    StudiesServiceError::Other(format!("Frame {index} not found").into())
                 })?;
                 Ok(vec![frame.clone()])
             }
@@ -68,7 +68,7 @@ fn extract_frames_from_raw_pixel_data(
                     let slice = full_data
                         .get(start..end)
                         .ok_or_else(|| {
-                            StudiesServiceError::Other(format!("Frame {} out of range", idx).into())
+                            StudiesServiceError::Other(format!("Frame {idx} out of range").into())
                         })?
                         .to_vec();
 

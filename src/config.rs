@@ -82,7 +82,7 @@ impl HttpServerConfig {
     pub fn max_upload_size(&self) -> usize {
         parse_size::parse_size(&self.max_upload_size)
             .map(|size| size as usize)
-            .unwrap_or_else(|e| panic!("Failed to parse max_upload_size: {}", e))
+            .unwrap_or_else(|e| panic!("Failed to parse max_upload_size: {e}"))
     }
 }
 

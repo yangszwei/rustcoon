@@ -204,7 +204,7 @@ impl SearchStudyDto {
                         .push(
                             modalities_in_study
                                 .iter()
-                                .map(|modality| format!("'{}'", modality))
+                                .map(|modality| format!("'{modality}'"))
                                 .collect::<Vec<String>>()
                                 .join(", "),
                         )
