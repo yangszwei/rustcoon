@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 axum = "0.8.1"
-bytes = "1.10.0"
+bytes = "1.11.1"
 clap = { version = "4.5.28", features = ["derive", "env"] }
 dicom = { version = "0.8.1", default-features = false }
 dicom-json = "0.8.1"
