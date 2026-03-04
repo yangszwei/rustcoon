@@ -1,0 +1,15 @@
+[package]
+name = "observability"
+version.workspace = true
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0.100"
+opentelemetry = { version = "0.31.0", features = ["metrics"] }
+opentelemetry-otlp = { version = "0.31.0", features = ["grpc-tonic"] }
+opentelemetry_sdk = "0.31.0"
+tracing.workspace = true
+tracing-opentelemetry = "0.32.0"
+tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt", "json"] }
+
+config = { path = "../config" }

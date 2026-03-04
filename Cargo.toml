@@ -1,32 +1,10 @@
-[package]
-name = "rustcoon"
+[workspace]
+members = ["crates/config", "crates/observability", "crates/ul"]
+resolver = "2"
+
+[workspace.package]
 version = "0.1.0"
 edition = "2021"
 
-[dependencies]
-axum = "0.8.1"
-bytes = "1.10.0"
-clap = { version = "4.5.28", features = ["derive", "env"] }
-dicom = { version = "0.8.1", default-features = false }
-dicom-json = "0.8.1"
-dicom-pixeldata = { version = "0.8.1", features = ["image", "jpeg", "jpegxl", "openjp2", "charls"] }
-dotenvy = "0.15.7"
-mime = "0.3.17"
-multer = "3.1.0"
-parse-size = "1.1.0"
-serde_json = "1.0.138"
-sqlx = { version = "0.8.3", features = ["runtime-tokio", "time", "uuid"] }
-thiserror = "2.0.11"
-tokio = { version = "1.43.1", features = ["full"] }
-tokio-stream = "0.1.17"
-tower-http = { version = "0.6.2", features = ["cors", "trace"] }
-tracing = "0.1.41"
-tracing-subscriber = "0.3.19"
-uuid = { version = "1.13.1", features = ["v4"] }
-
-[features]
-default = ["migrate", "postgres", "sqlite"]
-migrate = ["sqlx/migrate"]
-postgres = ["sqlx/postgres"]
-sqlite = ["sqlx/sqlite"]
-gdcm = ["dicom-pixeldata/gdcm"]
+[workspace.dependencies]
+tracing = "0.1.44"

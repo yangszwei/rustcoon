@@ -1,0 +1,8 @@
+[package]
+name = "config"
+version.workspace = true
+edition = "2021"
+
+[dependencies]
+config-rs = { package = "config", version = "0.15.19" } # using config-rs to avoid name conflict
+serde = { version = "1.0.228", features = ["derive"] }
