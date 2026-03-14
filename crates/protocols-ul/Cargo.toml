@@ -1,0 +1,17 @@
+[package]
+name = "rustcoon-ul"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+dicom-ul = "0.9"
+opentelemetry.workspace = true
+thiserror = "2.0.18"
+tracing.workspace = true
+
+rustcoon-application-entity = { path = "../domain-application-entity" }
+
+[dev-dependencies]
+tokio = { version = "1.50.0", features = ["macros", "rt-multi-thread", "time"] }
+
+rustcoon-config = { path = "../platform-config" }
