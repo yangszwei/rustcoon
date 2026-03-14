@@ -1,0 +1,14 @@
+[package]
+name = "rustcoon-telemetry"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+opentelemetry = "0.31.0"
+opentelemetry_sdk = { version = "0.31.0", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.31.0", features = ["grpc-tonic", "http-proto", "metrics", "trace"] }
+thiserror = "2.0.18"
+tracing-opentelemetry = "0.32.1"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "json"] }
+
+rustcoon-config = { path = "../platform-config" }

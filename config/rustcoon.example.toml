@@ -1,0 +1,23 @@
+[app]
+name = "rustcoon"
+
+[telemetry]
+log_level = "info"
+log_format = "json"
+
+[telemetry.tracing]
+enabled = true
+
+[telemetry.tracing.otlp]
+endpoint = "http://127.0.0.1:4317"
+protocol = "grpc"
+timeout_seconds = 10
+
+[telemetry.metrics]
+enabled = true
+export_interval_seconds = 30
+
+[telemetry.metrics.otlp]
+endpoint = "http://127.0.0.1:4317"
+protocol = "grpc"
+timeout_seconds = 10

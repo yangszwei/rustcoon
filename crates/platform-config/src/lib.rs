@@ -3,8 +3,10 @@
 //! This crate is the single place where runtime configuration is defined
 //! and validated.
 
+pub mod app;
 pub mod error;
 pub mod monolith;
+pub mod telemetry;
 
 pub use error::ConfigError;
 pub use monolith::MonolithConfig;
