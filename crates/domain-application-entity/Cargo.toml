@@ -1,0 +1,12 @@
+[package]
+name = "rustcoon-application-entity"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+thiserror = "2.0.18"
+
+rustcoon-config = { path = "../platform-config" }
+
+[dev-dependencies]
+dicom-ul = "0.9"

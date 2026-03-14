@@ -1,0 +1,10 @@
+# Use either [[application_entities.*]] or [[aes.*]], not both; otherwise
+# parsing fails with a duplicate-field error.
+
+[[application_entities.local]] # or [[aes.local]]
+title = "RUSTCOON"
+bind_address = "127.0.0.1:11112"
+
+[[application_entities.remote]] # or [[aes.remote]]
+title = "REMOTE_AE"
+address = "192.0.2.10:104"

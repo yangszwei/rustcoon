@@ -4,6 +4,7 @@
 //! and validated.
 
 pub mod app;
+pub mod application_entity;
 pub mod error;
 pub mod monolith;
 pub mod runtime;
