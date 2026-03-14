@@ -12,20 +12,38 @@ use crate::title::AeTitle;
 pub struct LocalApplicationEntity {
     title: AeTitle,
     bind_address: SocketAddr,
+    read_timeout_seconds: Option<u64>,
+    write_timeout_seconds: Option<u64>,
+    max_pdu_length: u32,
 }
 
 impl LocalApplicationEntity {
     /// Creates a local AE definition.
-    pub fn new(title: AeTitle, bind_address: SocketAddr) -> Self {
+    pub fn new(
+        title: AeTitle,
+        bind_address: SocketAddr,
+        read_timeout_seconds: Option<u64>,
+        write_timeout_seconds: Option<u64>,
+        max_pdu_length: u32,
+    ) -> Self {
         Self {
             title,
             bind_address,
+            read_timeout_seconds,
+            write_timeout_seconds,
+            max_pdu_length,
         }
     }
 
     /// Builds a local AE from platform config.
     pub fn from_config(config: &LocalApplicationEntityConfig) -> Result<Self, BuildError> {
-        Ok(Self::new(config.title.parse()?, config.bind_address))
+        Ok(Self::new(
+            config.title.parse()?,
+            config.bind_address,
+            config.read_timeout_seconds,
+            config.write_timeout_seconds,
+            config.max_pdu_length,
+        ))
     }
 
     /// Returns the AE title.
@@ -36,6 +54,21 @@ impl LocalApplicationEntity {
     /// Returns listener socket address for inbound associations.
     pub fn bind_address(&self) -> SocketAddr {
         self.bind_address
+    }
+
+    /// Returns read timeout in seconds.
+    pub fn read_timeout_seconds(&self) -> Option<u64> {
+        self.read_timeout_seconds
+    }
+
+    /// Returns write timeout in seconds.
+    pub fn write_timeout_seconds(&self) -> Option<u64> {
+        self.write_timeout_seconds
+    }
+
+    /// Returns max PDU length.
+    pub fn max_pdu_length(&self) -> u32 {
+        self.max_pdu_length
     }
 }
 
@@ -52,17 +85,42 @@ impl TryFrom<&LocalApplicationEntityConfig> for LocalApplicationEntity {
 pub struct RemoteApplicationEntity {
     title: AeTitle,
     address: SocketAddr,
+    connect_timeout_seconds: Option<u64>,
+    read_timeout_seconds: Option<u64>,
+    write_timeout_seconds: Option<u64>,
+    max_pdu_length: u32,
 }
 
 impl RemoteApplicationEntity {
     /// Creates a remote AE definition.
-    pub fn new(title: AeTitle, address: SocketAddr) -> Self {
-        Self { title, address }
+    pub fn new(
+        title: AeTitle,
+        address: SocketAddr,
+        connect_timeout_seconds: Option<u64>,
+        read_timeout_seconds: Option<u64>,
+        write_timeout_seconds: Option<u64>,
+        max_pdu_length: u32,
+    ) -> Self {
+        Self {
+            title,
+            address,
+            connect_timeout_seconds,
+            read_timeout_seconds,
+            write_timeout_seconds,
+            max_pdu_length,
+        }
     }
 
     /// Builds a remote AE from platform config.
     pub fn from_config(config: &RemoteApplicationEntityConfig) -> Result<Self, BuildError> {
-        Ok(Self::new(config.title.parse()?, config.address))
+        Ok(Self::new(
+            config.title.parse()?,
+            config.address,
+            config.connect_timeout_seconds,
+            config.read_timeout_seconds,
+            config.write_timeout_seconds,
+            config.max_pdu_length,
+        ))
     }
 
     /// Returns the AE title.
@@ -73,6 +131,26 @@ impl RemoteApplicationEntity {
     /// Returns outbound peer socket address.
     pub fn address(&self) -> SocketAddr {
         self.address
+    }
+
+    /// Returns connect timeout in seconds.
+    pub fn connect_timeout_seconds(&self) -> Option<u64> {
+        self.connect_timeout_seconds
+    }
+
+    /// Returns read timeout in seconds.
+    pub fn read_timeout_seconds(&self) -> Option<u64> {
+        self.read_timeout_seconds
+    }
+
+    /// Returns write timeout in seconds.
+    pub fn write_timeout_seconds(&self) -> Option<u64> {
+        self.write_timeout_seconds
+    }
+
+    /// Returns max PDU length.
+    pub fn max_pdu_length(&self) -> u32 {
+        self.max_pdu_length
     }
 }
 
@@ -98,6 +176,9 @@ mod tests {
         LocalApplicationEntityConfig {
             title: title.to_string(),
             bind_address,
+            read_timeout_seconds: Some(30),
+            write_timeout_seconds: Some(30),
+            max_pdu_length: 16_384,
         }
     }
 
@@ -105,6 +186,10 @@ mod tests {
         RemoteApplicationEntityConfig {
             title: title.to_string(),
             address,
+            connect_timeout_seconds: Some(5),
+            read_timeout_seconds: Some(30),
+            write_timeout_seconds: Some(30),
+            max_pdu_length: 16_384,
         }
     }
 
@@ -115,6 +200,9 @@ mod tests {
 
         assert_eq!(local.title().as_str(), "LOCAL_AE");
         assert_eq!(local.bind_address(), "127.0.0.1:11112".parse().unwrap());
+        assert_eq!(local.read_timeout_seconds(), Some(30));
+        assert_eq!(local.write_timeout_seconds(), Some(30));
+        assert_eq!(local.max_pdu_length(), 16_384);
     }
 
     #[test]
@@ -136,6 +224,10 @@ mod tests {
 
         assert_eq!(remote.title().as_str(), "REMOTE_AE");
         assert_eq!(remote.address(), "192.0.2.10:104".parse().unwrap());
+        assert_eq!(remote.connect_timeout_seconds(), Some(5));
+        assert_eq!(remote.read_timeout_seconds(), Some(30));
+        assert_eq!(remote.write_timeout_seconds(), Some(30));
+        assert_eq!(remote.max_pdu_length(), 16_384);
     }
 
     #[test]

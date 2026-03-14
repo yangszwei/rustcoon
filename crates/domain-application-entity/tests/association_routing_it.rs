@@ -62,6 +62,9 @@ fn local_cfg(title: &str, bind_address: SocketAddr) -> LocalApplicationEntityCon
     LocalApplicationEntityConfig {
         title: title.to_string(),
         bind_address,
+        read_timeout_seconds: Some(30),
+        write_timeout_seconds: Some(30),
+        max_pdu_length: 16_384,
     }
 }
 
@@ -69,6 +72,10 @@ fn remote_cfg(title: &str, address: SocketAddr) -> RemoteApplicationEntityConfig
     RemoteApplicationEntityConfig {
         title: title.to_string(),
         address,
+        connect_timeout_seconds: Some(5),
+        read_timeout_seconds: Some(30),
+        write_timeout_seconds: Some(30),
+        max_pdu_length: 16_384,
     }
 }
 

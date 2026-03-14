@@ -165,6 +165,9 @@ mod tests {
         LocalApplicationEntityConfig {
             title: title.to_string(),
             bind_address: bind,
+            read_timeout_seconds: Some(30),
+            write_timeout_seconds: Some(30),
+            max_pdu_length: 16_384,
         }
     }
 
@@ -172,6 +175,10 @@ mod tests {
         RemoteApplicationEntityConfig {
             title: title.to_string(),
             address,
+            connect_timeout_seconds: Some(5),
+            read_timeout_seconds: Some(30),
+            write_timeout_seconds: Some(30),
+            max_pdu_length: 16_384,
         }
     }
 
