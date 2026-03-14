@@ -1,0 +1,8 @@
+[package]
+name = "rustcoon-config"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+config = { version = "0.15.21", default-features = false, features = ["toml"] }
+serde = { version = "1.0.228", features = ["derive"] }
