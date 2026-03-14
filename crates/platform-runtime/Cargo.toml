@@ -1,0 +1,13 @@
+[package]
+name = "rustcoon-runtime"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+opentelemetry.workspace = true
+thiserror = "2.0.18"
+tokio = { version = "1.50.0", features = ["macros", "sync", "time"] }
+tokio-util = { version = "0.7.18", features = ["rt"] }
+tracing.workspace = true
+
+rustcoon-config = { path = "../platform-config" }

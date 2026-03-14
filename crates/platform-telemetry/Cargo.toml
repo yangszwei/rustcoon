@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-opentelemetry = "0.31.0"
+opentelemetry.workspace = true
 opentelemetry_sdk = { version = "0.31.0", features = ["rt-tokio"] }
 opentelemetry-otlp = { version = "0.31.0", features = ["grpc-tonic", "http-proto", "metrics", "trace"] }
 thiserror = "2.0.18"

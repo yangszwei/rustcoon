@@ -6,6 +6,7 @@
 pub mod app;
 pub mod error;
 pub mod monolith;
+pub mod runtime;
 pub mod telemetry;
 
 pub use error::ConfigError;
