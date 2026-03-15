@@ -18,9 +18,10 @@ use rustcoon_dimse::{
     AeRouteContext, AssociationContext, DimseError, DimseListener, DimseReader, DimseWriter,
     ErrorHandlerAction, ListenerErrorHandler, ServiceClassProvider,
 };
-use rustcoon_ul::{OutboundAssociationRequest, UlAssociation, UlListener};
+use rustcoon_ul::OutboundAssociationRequest;
 
-const VERIFICATION_SOP_CLASS: &str = "1.2.840.10008.1.1";
+mod common;
+use common::{VERIFICATION_SOP_CLASS, setup_ul_pair};
 
 fn local(title: &str, bind: SocketAddr) -> LocalApplicationEntityConfig {
     LocalApplicationEntityConfig {
@@ -41,47 +42,6 @@ fn remote(title: &str, address: SocketAddr) -> RemoteApplicationEntityConfig {
         write_timeout_seconds: Some(1),
         max_pdu_length: 16_384,
     }
-}
-
-fn setup_ul_pair(client_max_pdu_length: u32) -> Option<(UlAssociation, UlAssociation)> {
-    let registry = Arc::new(
-        ApplicationEntityRegistry::try_from_config(&ApplicationEntitiesConfig {
-            local: vec![local(
-                "REMOTE_SCP",
-                "127.0.0.1:0".parse().expect("valid addr"),
-            )],
-            remote: vec![remote(
-                "LOCAL_SCU",
-                "127.0.0.1:11112".parse().expect("valid addr"),
-            )],
-        })
-        .expect("valid registry"),
-    );
-
-    let listener = match UlListener::bind_from_registry(Arc::clone(&registry), "REMOTE_SCP") {
-        Ok(listener) => listener.with_abstract_syntax(VERIFICATION_SOP_CLASS),
-        Err(rustcoon_ul::UlError::Io(error)) if error.kind() == ErrorKind::PermissionDenied => {
-            return None;
-        }
-        Err(error) => panic!("listener should bind: {error}"),
-    };
-    let addr = listener
-        .local_addr()
-        .expect("listener address should resolve");
-
-    let server = thread::spawn(move || listener.accept().expect("server accept").0);
-
-    let client = OutboundAssociationRequest::new("LOCAL_SCU", "REMOTE_SCP", addr)
-        .connect_timeout(Duration::from_secs(1))
-        .read_timeout(Duration::from_secs(1))
-        .write_timeout(Duration::from_secs(1))
-        .max_pdu_length(client_max_pdu_length)
-        .with_abstract_syntax(VERIFICATION_SOP_CLASS)
-        .establish()
-        .expect("client should establish");
-
-    let server_association = server.join().expect("server join");
-    Some((server_association, client))
 }
 
 fn command_object(command_field: u16, has_data_set: bool) -> InMemDicomObject {
@@ -137,7 +97,9 @@ impl ListenerErrorHandler for FixedHandler {
 
 #[test]
 fn context_reader_and_writer_round_trip_works() {
-    let Some((server_association, mut client_association)) = setup_ul_pair(16_384) else {
+    let Some((server_association, mut client_association)) =
+        setup_ul_pair(16_384, VERIFICATION_SOP_CLASS)
+    else {
         return;
     };
     let context_id = client_association.presentation_contexts()[0].id;
@@ -247,7 +209,9 @@ fn context_reader_and_writer_round_trip_works() {
 
 #[test]
 fn context_route_plan_and_message_cycle_error_paths_work() {
-    let Some((server_association, mut client_association)) = setup_ul_pair(16_384) else {
+    let Some((server_association, mut client_association)) =
+        setup_ul_pair(16_384, VERIFICATION_SOP_CLASS)
+    else {
         return;
     };
     let context_id = client_association.presentation_contexts()[0].id;
@@ -287,7 +251,9 @@ fn context_route_plan_and_message_cycle_error_paths_work() {
 
 #[test]
 fn reader_and_writer_protocol_error_paths_are_reported() {
-    let Some((mut server_association, mut client_association)) = setup_ul_pair(16_384) else {
+    let Some((mut server_association, mut client_association)) =
+        setup_ul_pair(16_384, VERIFICATION_SOP_CLASS)
+    else {
         return;
     };
     let context_id = client_association.presentation_contexts()[0].id;

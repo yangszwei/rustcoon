@@ -1,8 +1,10 @@
 mod command;
 mod registry;
+mod verification;
 
 pub use command::{CommandField, DimseCommand, Priority};
 pub use registry::ServiceClassRegistry;
+pub use verification::{CEchoRequest, CEchoResponse, VerificationServiceProvider};
 
 use crate::context::AssociationContext;
 use crate::error::DimseError;
