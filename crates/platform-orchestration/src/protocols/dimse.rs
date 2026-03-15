@@ -1,4 +1,6 @@
+use std::io::ErrorKind;
 use std::sync::Arc;
+use std::time::Duration;
 
 use rustcoon_application_entity::ApplicationEntityRegistry;
 use rustcoon_dimse::{DimseError, DimseListener, ServiceClassRegistry};
@@ -39,9 +41,9 @@ fn bind_listener(
     local_ae_title: &str,
     accepted_abstract_syntaxes: Arc<Vec<String>>,
 ) -> Result<DimseListener, DimseError> {
-    DimseListener::bind_from_registry(ae_registry, local_ae_title).map(|listener| {
-        listener.with_abstract_syntaxes(accepted_abstract_syntaxes.iter().map(String::as_str))
-    })
+    DimseListener::bind_from_registry(ae_registry, local_ae_title)?
+        .with_abstract_syntaxes(accepted_abstract_syntaxes.iter().map(String::as_str))
+        .with_nonblocking_accept()
 }
 
 fn log_listener_started(listener: &DimseListener, local_ae_title: &str) -> Result<(), DimseError> {
@@ -63,45 +65,71 @@ fn spawn_listener_task(
     fatal_tx: mpsc::UnboundedSender<FatalRuntimeError>,
 ) {
     let shutdown_for_listener = shutdown.clone();
-    let shutdown_for_thread = shutdown_for_listener.clone();
     let fatal_tx_for_listener = fatal_tx;
     task_tracker.spawn(async move {
         let _keep_runtime_open = fatal_tx_for_listener;
-        let _listener_task = tokio::task::spawn_blocking(move || {
-            listener_loop(listener, provider, shutdown_for_thread, local_ae_title)
-        });
-        shutdown_for_listener.cancelled().await;
+        listener_loop(listener, provider, shutdown_for_listener, local_ae_title).await;
     });
 }
 
-fn listener_loop(
+async fn listener_loop(
     listener: DimseListener,
     provider: Arc<ServiceClassRegistry>,
     shutdown: CancellationToken,
     local_ae_title: String,
 ) {
+    let listener = Arc::new(listener);
     loop {
-        if shutdown.is_cancelled() {
-            break;
-        }
+        let listener_for_serve = Arc::clone(&listener);
+        let provider_for_serve = Arc::clone(&provider);
+        let mut serve_task = tokio::task::spawn_blocking(move || {
+            listener_for_serve.accept_and_serve(provider_for_serve.as_ref())
+        });
 
-        match listener.accept_and_serve(provider.as_ref()) {
-            Ok(()) => {}
-            Err(DimseError::Ul(rustcoon_ul::UlError::Rejected)) => {
-                warn!(
-                    local_ae_title = local_ae_title.as_str(),
-                    "association rejected by UL policy",
-                );
+        tokio::select! {
+            _ = shutdown.cancelled() => {
+                let _ = (&mut serve_task).await;
+                break;
             }
-            Err(error) => {
-                error!(
-                    local_ae_title = local_ae_title.as_str(),
-                    error = %error,
-                    "listener loop error",
-                );
+            join_result = &mut serve_task => {
+                let result = match join_result {
+                    Ok(result) => result,
+                    Err(join_error) => Err(DimseError::Protocol(format!(
+                        "listener worker join failure: {join_error}"
+                    ))),
+                };
+                if is_accept_would_block(&result) {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    continue;
+                }
+                handle_listener_result(result, local_ae_title.as_str());
             }
         }
     }
+}
+
+fn handle_listener_result(result: Result<(), DimseError>, local_ae_title: &str) {
+    match result {
+        Ok(()) => {}
+        Err(DimseError::Ul(rustcoon_ul::UlError::Rejected)) => {
+            warn!(local_ae_title, "association rejected by UL policy",);
+        }
+        Err(error) => {
+            error!(
+                local_ae_title,
+                error = %error,
+                "listener loop error",
+            );
+        }
+    }
+}
+
+fn is_accept_would_block(result: &Result<(), DimseError>) -> bool {
+    matches!(
+        result,
+        Err(DimseError::Ul(rustcoon_ul::UlError::Io(error)))
+            if error.kind() == ErrorKind::WouldBlock
+    )
 }
 
 #[cfg(test)]

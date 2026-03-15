@@ -51,6 +51,12 @@ impl UlListener {
         self
     }
 
+    /// Configure inbound socket accepts as non-blocking.
+    pub fn with_nonblocking_accept(self) -> Result<Self, UlError> {
+        self.listener.set_nonblocking(true)?;
+        Ok(self)
+    }
+
     /// Return listener socket address.
     pub fn local_addr(&self) -> Result<SocketAddr, UlError> {
         Ok(self.listener.local_addr()?)
@@ -70,6 +76,8 @@ impl UlListener {
         );
         let started_at = Instant::now();
         let (socket, peer_addr) = self.listener.accept()?;
+        // Keep listener non-blocking for cooperative shutdown, but run UL I/O on blocking streams.
+        socket.set_nonblocking(false)?;
         let local = self
             .registry
             .local(&self.local_ae_title)

@@ -49,6 +49,12 @@ impl DimseListener {
             .fold(self, |listener, uid| listener.with_abstract_syntax(uid))
     }
 
+    /// Configure inbound socket accepts as non-blocking.
+    pub fn with_nonblocking_accept(mut self) -> Result<Self, DimseError> {
+        self.listener = self.listener.with_nonblocking_accept()?;
+        Ok(self)
+    }
+
     /// Return the local AE title this listener is bound to.
     pub fn local_ae_title(&self) -> &AeTitle {
         &self.local_ae_title
