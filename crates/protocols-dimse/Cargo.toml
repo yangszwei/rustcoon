@@ -1,0 +1,18 @@
+[package]
+name = "rustcoon-dimse"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+dicom-core = "0.9.0"
+dicom-dictionary-std = "0.9.0"
+dicom-object = "0.9.0"
+dicom-transfer-syntax-registry = "0.9.0"
+dicom-ul = "0.9.0"
+thiserror = "2.0.18"
+
+rustcoon-application-entity = { path = "../domain-application-entity" }
+rustcoon-ul = { path = "../protocols-ul" }
+
+[dev-dependencies]
+rustcoon-config = { path = "../platform-config" }
