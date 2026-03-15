@@ -88,5 +88,5 @@ pub struct RemoteApplicationEntityConfig {
 }
 
 const fn default_max_pdu_length() -> u32 {
-    16_384
+    65_536
 }

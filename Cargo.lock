@@ -1316,6 +1316,7 @@ dependencies = [
  "dicom-ul",
  "rustcoon-config",
  "thiserror",
+ "tracing",
 ]
 
 [[package]]

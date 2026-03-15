@@ -39,7 +39,7 @@ impl OutboundAssociationRequest {
             connect_timeout: None,
             read_timeout: None,
             write_timeout: None,
-            max_pdu_length: 16_384,
+            max_pdu_length: 65_536,
             abstract_syntax_uids: Vec::new(),
         }
     }

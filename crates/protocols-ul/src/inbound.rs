@@ -31,7 +31,7 @@ impl InboundAssociationRequest<AcceptAny> {
             local_ae_title: local_ae_title.into(),
             read_timeout: None,
             write_timeout: None,
-            max_pdu_length: 16_384,
+            max_pdu_length: 65_536,
             abstract_syntax_uids: Vec::new(),
             access_control: AcceptAny,
         }

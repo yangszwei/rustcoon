@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 thiserror = "2.0.18"
+tracing.workspace = true
 
 rustcoon-config = { path = "../platform-config" }
 

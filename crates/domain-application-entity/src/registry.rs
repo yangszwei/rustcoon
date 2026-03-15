@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 
 use rustcoon_config::application_entity::ApplicationEntitiesConfig;
+use tracing::warn;
 
 use crate::error::{BuildError, InboundAccessError, RoutePlanError};
 use crate::model::{LocalApplicationEntity, RemoteApplicationEntity};
@@ -15,6 +16,8 @@ pub struct ApplicationEntityRegistry {
     remote: HashMap<AeTitle, RemoteApplicationEntity>,
 }
 
+const MIN_RECOMMENDED_MAX_PDU_LENGTH: u32 = 65_536;
+
 impl ApplicationEntityRegistry {
     /// Build registry from typed config.
     ///
@@ -23,6 +26,7 @@ impl ApplicationEntityRegistry {
         let mut registry = Self::default();
 
         for local in &config.local {
+            warn_if_low_max_pdu("local", &local.title, local.max_pdu_length);
             let local = LocalApplicationEntity::from_config(local)?;
             if registry.contains_title(local.title()) {
                 return Err(BuildError::DuplicateTitle(local.title().to_string()));
@@ -31,6 +35,7 @@ impl ApplicationEntityRegistry {
         }
 
         for remote in &config.remote {
+            warn_if_low_max_pdu("remote", &remote.title, remote.max_pdu_length);
             let remote = RemoteApplicationEntity::from_config(remote)?;
             if registry.contains_title(remote.title()) {
                 return Err(BuildError::DuplicateTitle(remote.title().to_string()));
@@ -145,6 +150,18 @@ impl ApplicationEntityRegistry {
         }
 
         Ok(())
+    }
+}
+
+fn warn_if_low_max_pdu(kind: &str, title: &str, max_pdu_length: u32) {
+    if max_pdu_length < MIN_RECOMMENDED_MAX_PDU_LENGTH {
+        warn!(
+            ae_kind = kind,
+            ae_title = title,
+            max_pdu_length,
+            recommended_min = MIN_RECOMMENDED_MAX_PDU_LENGTH,
+            "AE max_pdu_length is below the recommended default and may reduce interoperability",
+        );
     }
 }
 
