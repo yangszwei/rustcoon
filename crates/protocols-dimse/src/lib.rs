@@ -2,7 +2,6 @@
 //!
 //! This crate provides streaming DIMSE message I/O and foundational service
 //! abstractions intended to sit above UL and alongside AE routing.
-//! It intentionally excludes concrete services and runtime wiring.
 
 mod context;
 mod error;
@@ -16,4 +15,7 @@ pub use error::DimseError;
 pub use error_handler::{DefaultErrorHandler, ErrorHandlerAction, ListenerErrorHandler};
 pub use listener::DimseListener;
 pub use message::{CommandObject, DimseReader, DimseWriter};
-pub use service::{CommandField, DimseCommand, Priority, ServiceClassProvider};
+pub use service::{
+    CommandField, DescribedServiceClassProvider, DimseCommand, Priority, ServiceBinding,
+    ServiceClassProvider, ServiceClassRegistry,
+};

@@ -38,6 +38,17 @@ impl DimseListener {
         self
     }
 
+    /// Add multiple abstract syntax UIDs used during inbound UL negotiation.
+    pub fn with_abstract_syntaxes<I, S>(self, abstract_syntax_uids: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        abstract_syntax_uids
+            .into_iter()
+            .fold(self, |listener, uid| listener.with_abstract_syntax(uid))
+    }
+
     /// Return the local AE title this listener is bound to.
     pub fn local_ae_title(&self) -> &AeTitle {
         &self.local_ae_title
@@ -101,12 +112,15 @@ impl DimseListener {
 
 #[cfg(test)]
 mod tests {
+    use std::io::ErrorKind;
     use std::sync::Arc;
+    use std::time::Duration;
 
     use rustcoon_application_entity::ApplicationEntityRegistry;
     use rustcoon_config::application_entity::{
         ApplicationEntitiesConfig, LocalApplicationEntityConfig, RemoteApplicationEntityConfig,
     };
+    use rustcoon_ul::{OutboundAssociationRequest, UlError};
 
     use crate::{DimseError, DimseListener};
 
@@ -145,6 +159,75 @@ mod tests {
         assert!(matches!(
             result,
             Err(DimseError::Ul(rustcoon_ul::UlError::LocalAeNotFound(_)))
+        ));
+    }
+
+    #[test]
+    fn with_abstract_syntaxes_accepts_any_added_uid() {
+        let registry = Arc::new(
+            ApplicationEntityRegistry::try_from_config(&ApplicationEntitiesConfig {
+                local: vec![local("REMOTE_SCP", "127.0.0.1:0".parse().unwrap())],
+                remote: vec![remote("LOCAL_SCU", "127.0.0.1:11112".parse().unwrap())],
+            })
+            .unwrap(),
+        );
+
+        let listener = match DimseListener::bind_from_registry(registry, "REMOTE_SCP") {
+            Ok(listener) => {
+                listener.with_abstract_syntaxes(["1.2.840.10008.1.1", "1.2.840.10008.5.1.4.1.1.2"])
+            }
+            Err(DimseError::Ul(UlError::Io(error)))
+                if error.kind() == ErrorKind::PermissionDenied =>
+            {
+                return;
+            }
+            Err(error) => panic!("listener bind should succeed: {error}"),
+        };
+        let addr = listener.local_addr().expect("listener address");
+        let server = std::thread::spawn(move || listener.accept());
+
+        let client = OutboundAssociationRequest::new("LOCAL_SCU", "REMOTE_SCP", addr)
+            .connect_timeout(Duration::from_secs(1))
+            .with_abstract_syntax("1.2.840.10008.5.1.4.1.1.2")
+            .establish();
+        assert!(client.is_ok());
+
+        let accepted = server.join().expect("server thread");
+        assert!(accepted.is_ok());
+    }
+
+    #[test]
+    fn with_abstract_syntaxes_empty_iterator_keeps_listener_unconfigured() {
+        let registry = Arc::new(
+            ApplicationEntityRegistry::try_from_config(&ApplicationEntitiesConfig {
+                local: vec![local("REMOTE_SCP", "127.0.0.1:0".parse().unwrap())],
+                remote: vec![remote("LOCAL_SCU", "127.0.0.1:11112".parse().unwrap())],
+            })
+            .unwrap(),
+        );
+
+        let listener = match DimseListener::bind_from_registry(registry, "REMOTE_SCP") {
+            Ok(listener) => listener.with_abstract_syntaxes(std::iter::empty::<&str>()),
+            Err(DimseError::Ul(UlError::Io(error)))
+                if error.kind() == ErrorKind::PermissionDenied =>
+            {
+                return;
+            }
+            Err(error) => panic!("listener bind should succeed: {error}"),
+        };
+        let addr = listener.local_addr().expect("listener address");
+        let server = std::thread::spawn(move || listener.accept());
+
+        let client = OutboundAssociationRequest::new("LOCAL_SCU", "REMOTE_SCP", addr)
+            .connect_timeout(Duration::from_secs(1))
+            .with_abstract_syntax("1.2.840.10008.1.1")
+            .establish();
+        assert!(client.is_err());
+
+        let accepted = server.join().expect("server thread");
+        assert!(matches!(
+            accepted,
+            Err(DimseError::Ul(UlError::MissingAbstractSyntax))
         ));
     }
 }
