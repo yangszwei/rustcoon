@@ -1,0 +1,17 @@
+[package]
+name = "rustcoon-orchestration"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+thiserror = "2.0.18"
+tokio = { version = "1.50.0", features = ["signal"] }
+tokio-util = { version = "0.7.18", features = ["rt"] }
+tracing.workspace = true
+
+rustcoon-application-entity = { path = "../domain-application-entity" }
+rustcoon-config = { path = "../platform-config" }
+rustcoon-dimse = { path = "../protocols-dimse" }
+rustcoon-runtime = { path = "../platform-runtime" }
+rustcoon-telemetry = { path = "../platform-telemetry" }
+rustcoon-ul = { path = "../protocols-ul" }
