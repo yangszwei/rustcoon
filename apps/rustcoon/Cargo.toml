@@ -4,3 +4,11 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+tokio = { version = "1.50.0", features = ["macros", "rt-multi-thread"] }
+tokio-util = { version = "0.7.18", features = ["rt"] }
+
+rustcoon-application-entity = { path = "../../crates/domain-application-entity" }
+rustcoon-config = { path = "../../crates/platform-config" }
+rustcoon-dimse = { path = "../../crates/protocols-dimse" }
+rustcoon-orchestration = { path = "../../crates/platform-orchestration" }
+rustcoon-runtime = { path = "../../crates/platform-runtime" }

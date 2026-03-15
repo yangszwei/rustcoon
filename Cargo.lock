@@ -1299,6 +1299,15 @@ dependencies = [
 [[package]]
 name = "rustcoon"
 version = "0.1.0"
+dependencies = [
+ "rustcoon-application-entity",
+ "rustcoon-config",
+ "rustcoon-dimse",
+ "rustcoon-orchestration",
+ "rustcoon-runtime",
+ "tokio",
+ "tokio-util",
+]
 
 [[package]]
 name = "rustcoon-application-entity"
