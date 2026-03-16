@@ -141,6 +141,14 @@ impl AssociationContext {
         self.writer.send_data_pdv(&mut self.association, pdv)
     }
 
+    pub fn bytes_in(&self) -> u64 {
+        self.reader.bytes_in()
+    }
+
+    pub fn bytes_out(&self) -> u64 {
+        self.writer.bytes_out()
+    }
+
     /// Consume the context and return the UL association.
     pub fn into_association(self) -> UlAssociation {
         self.association

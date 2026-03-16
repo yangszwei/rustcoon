@@ -11,15 +11,17 @@ const PDATA_PDU_HEADER_BYTES: usize = 6;
 
 /// Stateless DIMSE writer.
 #[derive(Debug, Default)]
-pub struct DimseWriter;
+pub struct DimseWriter {
+    bytes_out: u64,
+}
 
 impl DimseWriter {
     pub fn new() -> Self {
-        Self
+        Self::default()
     }
 
     pub fn send_command_object(
-        &self,
+        &mut self,
         association: &mut UlAssociation,
         presentation_context_id: u8,
         command: &InMemDicomObject,
@@ -42,7 +44,7 @@ impl DimseWriter {
     }
 
     pub fn send_data_pdv(
-        &self,
+        &mut self,
         association: &mut UlAssociation,
         pdv: PDataValue,
     ) -> Result<(), DimseError> {
@@ -52,7 +54,11 @@ impl DimseWriter {
         self.send_pdv(association, pdv)
     }
 
-    fn send_pdv(&self, association: &mut UlAssociation, pdv: PDataValue) -> Result<(), DimseError> {
+    fn send_pdv(
+        &mut self,
+        association: &mut UlAssociation,
+        pdv: PDataValue,
+    ) -> Result<(), DimseError> {
         validate_presentation_context(association, pdv.presentation_context_id)?;
 
         let peer_max_pdu_length = association.peer_max_pdu_length() as usize;
@@ -66,6 +72,9 @@ impl DimseWriter {
             }
 
             association.send_pdu(&Pdu::PData { data: vec![pdv] })?;
+            self.bytes_out = self
+                .bytes_out
+                .saturating_add((PDATA_PDU_HEADER_BYTES + PDV_ITEM_OVERHEAD_BYTES) as u64);
             return Ok(());
         }
 
@@ -84,11 +93,19 @@ impl DimseWriter {
                     data: fragment_data,
                 }],
             })?;
+            self.bytes_out = self
+                .bytes_out
+                .saturating_add((PDATA_PDU_HEADER_BYTES + PDV_ITEM_OVERHEAD_BYTES) as u64)
+                .saturating_add((end - offset) as u64);
 
             offset = end;
         }
 
         Ok(())
+    }
+
+    pub fn bytes_out(&self) -> u64 {
+        self.bytes_out
     }
 }
 
@@ -277,7 +294,7 @@ mod tests {
         let Some((_server, mut client, accepted_id, rejected_id)) = setup_ul_pair(16_384) else {
             return;
         };
-        let writer = DimseWriter::new();
+        let mut writer = DimseWriter::new();
         let command = valid_command(false);
 
         let missing = writer.send_command_object(&mut client, accepted_id + 100, &command);
@@ -294,7 +311,7 @@ mod tests {
         let Some((_server, mut client, context_id, _)) = setup_ul_pair(16_384) else {
             return;
         };
-        let writer = DimseWriter::new();
+        let mut writer = DimseWriter::new();
 
         let missing = InMemDicomObject::new_empty();
         let result = writer.send_command_object(&mut client, context_id, &missing);
@@ -315,7 +332,7 @@ mod tests {
         let Some((_server, mut client, context_id, _)) = setup_ul_pair(16_384) else {
             return;
         };
-        let writer = DimseWriter::new();
+        let mut writer = DimseWriter::new();
 
         let wrong_type = writer.send_data_pdv(
             &mut client,
@@ -345,7 +362,7 @@ mod tests {
         let Some((mut server, mut client, context_id, _)) = setup_ul_pair(4096) else {
             return;
         };
-        let writer = DimseWriter::new();
+        let mut writer = DimseWriter::new();
         let mut reader = DimseReader::new();
 
         writer

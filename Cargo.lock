@@ -1340,6 +1340,7 @@ dependencies = [
  "rustcoon-config",
  "rustcoon-ul",
  "thiserror",
+ "tracing",
 ]
 
 [[package]]

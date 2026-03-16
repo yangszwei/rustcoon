@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use rustcoon_application_entity::{AeTitle, ApplicationEntityRegistry};
-use tracing::{debug, info, info_span, warn};
+use tracing::{info, info_span, warn};
 
 use crate::access_control::RegistryAccessControl;
 use crate::association::UlAssociation;
@@ -69,11 +69,6 @@ impl UlListener {
             local_ae_title = self.local_ae_title.as_str(),
         );
         let _entered = span.enter();
-        debug!(
-            op = "listener.accept.start",
-            local_ae_title = self.local_ae_title.as_str(),
-            "Waiting for inbound UL association"
-        );
         let started_at = Instant::now();
         let (socket, peer_addr) = self.listener.accept()?;
         // Keep listener non-blocking for cooperative shutdown, but run UL I/O on blocking streams.

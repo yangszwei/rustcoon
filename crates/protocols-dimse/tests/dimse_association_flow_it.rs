@@ -120,7 +120,7 @@ fn context_reader_and_writer_round_trip_works() {
         rustcoon_ul::AssociationRole::Acceptor
     );
 
-    let writer = DimseWriter::new();
+    let mut writer = DimseWriter::new();
     writer
         .send_command_object(
             &mut client_association,
@@ -224,7 +224,7 @@ fn context_route_plan_and_message_cycle_error_paths_work() {
     let mut context = AssociationContext::new(server_association).with_route_plan(&route);
     assert!(context.route().is_some());
 
-    let writer = DimseWriter::new();
+    let mut writer = DimseWriter::new();
     writer
         .send_command_object(
             &mut client_association,
@@ -259,7 +259,7 @@ fn reader_and_writer_protocol_error_paths_are_reported() {
     let context_id = client_association.presentation_contexts()[0].id;
 
     let mut reader = DimseReader::new();
-    let writer = DimseWriter::new();
+    let mut writer = DimseWriter::new();
 
     let send_data_as_first = Pdu::PData {
         data: vec![PDataValue {
@@ -336,7 +336,7 @@ fn listener_accept_and_default_release_handler_work() {
     });
 
     listener
-        .accept_and_serve(&ReadOneProvider)
+        .accept_and_handle(&ReadOneProvider)
         .expect("default release handler should complete");
     client.join().expect("client join");
 }
@@ -380,7 +380,7 @@ fn listener_accept_and_custom_error_handler_paths_work() {
     });
 
     listener
-        .accept_and_serve_with_handler(
+        .accept_and_handle_with_handler(
             &ErrorProvider("stop now"),
             &FixedHandler(ErrorHandlerAction::Stop),
         )
@@ -428,7 +428,7 @@ fn listener_accept_and_custom_error_handler_paths_work() {
         ));
     });
 
-    let result = listener.accept_and_serve_with_handler(
+    let result = listener.accept_and_handle_with_handler(
         &ErrorProvider("abort"),
         &FixedHandler(ErrorHandlerAction::AbortAndStop),
     );

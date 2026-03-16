@@ -7,6 +7,7 @@ use rustcoon_ul::UlListener;
 
 use crate::error::DimseError;
 use crate::error_handler::{DefaultErrorHandler, ErrorHandlerAction, ListenerErrorHandler};
+use crate::instrumentation::ListenerAcceptInstrumentation;
 use crate::service::ServiceClassProvider;
 use crate::{AeRouteContext, AssociationContext};
 
@@ -70,7 +71,9 @@ impl DimseListener {
     pub fn accept(&self) -> Result<(AssociationContext, SocketAddr), DimseError> {
         let (association, peer_addr) = self.listener.accept()?;
         let route = AeRouteContext {
-            calling_ae_title: None,
+            calling_ae_title: association
+                .peer_ae_title()
+                .and_then(|title| title.parse::<AeTitle>().ok()),
             called_ae_title: self.local_ae_title.clone(),
         };
         Ok((
@@ -79,31 +82,62 @@ impl DimseListener {
         ))
     }
 
-    /// Accept one association and serve DIMSE messages until the loop stops.
+    /// Accept one association and handle DIMSE messages until the loop stops.
     /// Uses `DefaultErrorHandler` for error-policy decisions.
-    pub fn accept_and_serve(&self, provider: &dyn ServiceClassProvider) -> Result<(), DimseError> {
-        self.accept_and_serve_with_handler(provider, &DefaultErrorHandler)
+    pub fn accept_and_handle(&self, provider: &dyn ServiceClassProvider) -> Result<(), DimseError> {
+        self.accept_and_handle_with_handler(provider, &DefaultErrorHandler)
     }
 
-    /// Accept one association and serve DIMSE messages with custom error handling.
-    pub fn accept_and_serve_with_handler(
+    /// Accept one association and handle DIMSE messages with custom error handling.
+    pub fn accept_and_handle_with_handler(
         &self,
         provider: &dyn ServiceClassProvider,
         error_handler: &dyn ListenerErrorHandler,
     ) -> Result<(), DimseError> {
-        let (mut ctx, _) = self.accept()?;
+        let (mut ctx, peer_addr) = self.accept()?;
+        let calling_ae_title = ctx
+            .route()
+            .and_then(|route| route.calling_ae_title.as_ref())
+            .map(AeTitle::as_str)
+            .unwrap_or("UNKNOWN");
+        let instrumentation = ListenerAcceptInstrumentation::new(
+            peer_addr,
+            calling_ae_title,
+            self.local_ae_title.as_str(),
+        );
+        instrumentation.log_accepted();
 
         loop {
             match provider.handle(&mut ctx) {
                 Ok(()) => {}
                 Err(error) => match error_handler.on_error(&error) {
                     ErrorHandlerAction::Continue => continue,
-                    ErrorHandlerAction::Stop => break,
+                    ErrorHandlerAction::Stop => {
+                        instrumentation.log_complete(
+                            "stopped",
+                            None,
+                            ctx.bytes_in(),
+                            ctx.bytes_out(),
+                        );
+                        break;
+                    }
                     ErrorHandlerAction::SendReleaseAndStop => {
                         ctx.association_mut().send_pdu(&Pdu::ReleaseRP)?;
+                        instrumentation.log_complete(
+                            "completed",
+                            Some(0x0000),
+                            ctx.bytes_in(),
+                            ctx.bytes_out(),
+                        );
                         break;
                     }
                     ErrorHandlerAction::AbortAndStop => {
+                        instrumentation.log_complete(
+                            "aborted",
+                            None,
+                            ctx.bytes_in(),
+                            ctx.bytes_out(),
+                        );
                         let association = ctx.into_association();
                         let _ = association.abort();
                         return Err(error);

@@ -22,6 +22,7 @@ struct ActiveDataSet {
 pub struct DimseReader {
     pending_pdvs: VecDeque<PDataValue>,
     active_data_set: Option<ActiveDataSet>,
+    bytes_in: u64,
 }
 
 impl DimseReader {
@@ -113,6 +114,10 @@ impl DimseReader {
             .unwrap_or(false)
     }
 
+    pub fn bytes_in(&self) -> u64 {
+        self.bytes_in
+    }
+
     fn read_command_fragments(
         &mut self,
         association: &mut UlAssociation,
@@ -161,6 +166,14 @@ impl DimseReader {
                     if data.is_empty() {
                         continue;
                     }
+                    const PDATA_PDU_HEADER_BYTES: u64 = 6;
+                    const PDV_ITEM_OVERHEAD_BYTES: u64 = 6;
+                    let payload_len = data.iter().map(|pdv| pdv.data.len() as u64).sum::<u64>();
+                    self.bytes_in = self
+                        .bytes_in
+                        .saturating_add(PDATA_PDU_HEADER_BYTES)
+                        .saturating_add(PDV_ITEM_OVERHEAD_BYTES.saturating_mul(data.len() as u64))
+                        .saturating_add(payload_len);
                     self.pending_pdvs.extend(data);
                     return self
                         .pending_pdvs

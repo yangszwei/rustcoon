@@ -26,6 +26,7 @@ enum UlAssociationInner {
 #[derive(Debug)]
 pub struct UlAssociation {
     role: AssociationRole,
+    peer_ae_title: Option<String>,
     inner: Option<UlAssociationInner>,
 }
 
@@ -42,14 +43,17 @@ impl UlAssociation {
         record_association_established(AssociationRole::Requestor);
         Self {
             role: AssociationRole::Requestor,
+            peer_ae_title: None,
             inner: Some(UlAssociationInner::Requestor(association)),
         }
     }
 
     pub(crate) fn from_acceptor(association: ServerAssociation<TcpStream>) -> Self {
         record_association_established(AssociationRole::Acceptor);
+        let peer_ae_title = Some(association.client_ae_title().to_string());
         Self {
             role: AssociationRole::Acceptor,
+            peer_ae_title,
             inner: Some(UlAssociationInner::Acceptor(association)),
         }
     }
@@ -57,6 +61,11 @@ impl UlAssociation {
     /// Returns this side's role for the association.
     pub fn role(&self) -> AssociationRole {
         self.role
+    }
+
+    /// Returns peer AE title when known (acceptor side).
+    pub fn peer_ae_title(&self) -> Option<&str> {
+        self.peer_ae_title.as_deref()
     }
 
     /// Send one PDU to the peer.
@@ -323,6 +332,7 @@ mod tests {
         {
             let association = UlAssociation {
                 role: AssociationRole::Requestor,
+                peer_ae_title: None,
                 inner: None,
             };
             drop(association);

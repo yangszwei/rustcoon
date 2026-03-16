@@ -83,7 +83,7 @@ async fn listener_loop(
         let listener_for_serve = Arc::clone(&listener);
         let provider_for_serve = Arc::clone(&provider);
         let mut serve_task = tokio::task::spawn_blocking(move || {
-            listener_for_serve.accept_and_serve(provider_for_serve.as_ref())
+            listener_for_serve.accept_and_handle(provider_for_serve.as_ref())
         });
 
         tokio::select! {

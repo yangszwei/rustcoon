@@ -6,6 +6,7 @@
 mod context;
 mod error;
 mod error_handler;
+mod instrumentation;
 mod listener;
 mod message;
 mod service;
