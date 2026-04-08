@@ -1,0 +1,12 @@
+[package]
+name = "rustcoon-storage-replicated"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+async-trait = "0.1.89"
+
+rustcoon-storage = { path = "../ports-storage" }
+
+[dev-dependencies]
+tokio = { version = "1.50.0", features = ["macros", "rt", "io-util"] }
