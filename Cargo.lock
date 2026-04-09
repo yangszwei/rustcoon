@@ -1435,6 +1435,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustcoon-ingest"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "dicom-core",
+ "dicom-dictionary-std",
+ "dicom-object",
+ "rustcoon-dicom",
+ "rustcoon-index",
+ "rustcoon-storage",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "rustcoon-orchestration"
 version = "0.1.0"
 dependencies = [
