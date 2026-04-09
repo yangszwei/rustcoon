@@ -1398,6 +1398,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustcoon-dicom"
+version = "0.1.0"
+dependencies = [
+ "thiserror",
+]
+
+[[package]]
 name = "rustcoon-dimse"
 version = "0.1.0"
 dependencies = [
