@@ -58,6 +58,12 @@ pub(crate) fn testing_reset_metrics_state() {
     active_associations().store(0, Ordering::Relaxed);
 }
 
+#[cfg(test)]
+pub(crate) fn testing_metrics_state_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().expect("metrics test lock poisoned")
+}
+
 pub(crate) fn record_association_established(role: AssociationRole) {
     let role = role_label(role);
     ul_metrics()
@@ -122,12 +128,13 @@ mod tests {
 
     use super::{
         pdu_kind, record_association_closed, record_association_established,
-        testing_active_associations, testing_reset_metrics_state,
+        testing_active_associations, testing_metrics_state_lock, testing_reset_metrics_state,
     };
     use crate::association::AssociationRole;
 
     #[test]
     fn association_lifecycle_updates_active_count_safely() {
+        let _guard = testing_metrics_state_lock();
         testing_reset_metrics_state();
         assert_eq!(testing_active_associations(), 0);
 

@@ -302,7 +302,8 @@ mod tests {
     use super::{AssociationRole, UlAssociation, classify_acceptor_release_response};
     use crate::UlError;
     use crate::instrumentation::{
-        record_association_established, testing_active_associations, testing_reset_metrics_state,
+        record_association_established, testing_active_associations, testing_metrics_state_lock,
+        testing_reset_metrics_state,
     };
 
     #[test]
@@ -325,6 +326,7 @@ mod tests {
 
     #[test]
     fn drop_skips_close_metrics_when_inner_already_consumed() {
+        let _guard = testing_metrics_state_lock();
         testing_reset_metrics_state();
         record_association_established(AssociationRole::Requestor);
         assert_eq!(testing_active_associations(), 1);
@@ -339,5 +341,6 @@ mod tests {
         }
 
         assert_eq!(testing_active_associations(), 1);
+        testing_reset_metrics_state();
     }
 }
