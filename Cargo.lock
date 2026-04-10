@@ -1408,15 +1408,23 @@ dependencies = [
 name = "rustcoon-dimse"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "dicom-core",
  "dicom-dictionary-std",
+ "dicom-encoding",
  "dicom-object",
  "dicom-transfer-syntax-registry",
  "dicom-ul",
  "rustcoon-application-entity",
  "rustcoon-config",
+ "rustcoon-dicom",
+ "rustcoon-index",
+ "rustcoon-ingest",
+ "rustcoon-storage",
  "rustcoon-ul",
+ "tempfile",
  "thiserror",
+ "tokio",
  "tracing",
 ]
 

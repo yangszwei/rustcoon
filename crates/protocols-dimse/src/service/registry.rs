@@ -3,9 +3,7 @@ use std::sync::Arc;
 
 use crate::context::AssociationContext;
 use crate::error::DimseError;
-use crate::service::{
-    CommandField, DescribedServiceClassProvider, ServiceBinding, ServiceClassProvider,
-};
+use crate::service::{CommandField, DescribedServiceClassProvider, ServiceClassProvider};
 
 const ANY_SOP_CLASS_UID: &str = "*";
 
@@ -36,12 +34,12 @@ impl ServiceClassRegistry {
     where
         P: DescribedServiceClassProvider + 'static,
     {
-        let bindings: &[ServiceBinding] = provider.bindings();
+        let bindings = provider.bindings().to_vec();
         let provider: Arc<dyn ServiceClassProvider> = provider;
-        for binding in bindings {
+        for binding in &bindings {
             self.register(
                 binding.command_field,
-                binding.sop_class_uid,
+                binding.sop_class_uid.as_ref(),
                 provider.clone(),
             );
         }
@@ -167,8 +165,8 @@ mod tests {
     }
 
     impl DescribedServiceClassProvider for MultiBindingProvider {
-        fn bindings(&self) -> &'static [ServiceBinding] {
-            const BINDINGS: [ServiceBinding; 2] = [
+        fn bindings(&self) -> &[ServiceBinding] {
+            static BINDINGS: [ServiceBinding; 2] = [
                 ServiceBinding::new(CommandField::CFindRq, "1.2.3"),
                 ServiceBinding::new(CommandField::CGetRq, "1.2.4"),
             ];

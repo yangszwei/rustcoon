@@ -86,6 +86,8 @@ pub struct DimseCommand {
     pub priority: Option<Priority>,
     pub status: Option<u16>,
     pub move_destination: Option<String>,
+    pub move_originator_ae_title: Option<String>,
+    pub move_originator_message_id: Option<u16>,
     pub has_data_set: bool,
 }
 
@@ -99,14 +101,22 @@ impl DimseCommand {
             "Command Data Set Type",
         )? != 0x0101;
 
-        let sop_class_uid = optional_string(command_object, tags::AFFECTED_SOP_CLASS_UID)?.or(
-            optional_string(command_object, tags::REQUESTED_SOP_CLASS_UID)?,
-        );
-        let sop_instance_uid = optional_string(command_object, tags::AFFECTED_SOP_INSTANCE_UID)?
-            .or(optional_string(
-                command_object,
-                tags::REQUESTED_SOP_INSTANCE_UID,
-            )?);
+        let sop_class_uid = match command_field {
+            CommandField::CStoreRq | CommandField::CStoreRsp => {
+                optional_string(command_object, tags::AFFECTED_SOP_CLASS_UID)?
+            }
+            _ => optional_string(command_object, tags::AFFECTED_SOP_CLASS_UID)?.or(
+                optional_string(command_object, tags::REQUESTED_SOP_CLASS_UID)?,
+            ),
+        };
+        let sop_instance_uid = match command_field {
+            CommandField::CStoreRq | CommandField::CStoreRsp => {
+                optional_string(command_object, tags::AFFECTED_SOP_INSTANCE_UID)?
+            }
+            _ => optional_string(command_object, tags::AFFECTED_SOP_INSTANCE_UID)?.or(
+                optional_string(command_object, tags::REQUESTED_SOP_INSTANCE_UID)?,
+            ),
+        };
 
         Ok(Self {
             presentation_context_id: command_object.presentation_context_id,
@@ -121,6 +131,14 @@ impl DimseCommand {
             priority: optional_u16(command_object, tags::PRIORITY)?.map(Priority::from_raw),
             status: optional_u16(command_object, tags::STATUS)?,
             move_destination: optional_string(command_object, tags::MOVE_DESTINATION)?,
+            move_originator_ae_title: optional_string(
+                command_object,
+                tags::MOVE_ORIGINATOR_APPLICATION_ENTITY_TITLE,
+            )?,
+            move_originator_message_id: optional_u16(
+                command_object,
+                tags::MOVE_ORIGINATOR_MESSAGE_ID,
+            )?,
             has_data_set,
         })
     }
@@ -220,6 +238,8 @@ mod tests {
         assert!(parsed.sop_instance_uid.is_none());
         assert!(parsed.message_id.is_none());
         assert!(parsed.priority.is_none());
+        assert!(parsed.move_originator_ae_title.is_none());
+        assert!(parsed.move_originator_message_id.is_none());
     }
 
     #[test]
@@ -258,6 +278,16 @@ mod tests {
         command_object
             .command
             .put(DataElement::new(tags::MOVE_DESTINATION, VR::AE, "DEST_AE"));
+        command_object.command.put(DataElement::new(
+            tags::MOVE_ORIGINATOR_APPLICATION_ENTITY_TITLE,
+            VR::AE,
+            "MOVE_SCU",
+        ));
+        command_object.command.put(DataElement::new(
+            tags::MOVE_ORIGINATOR_MESSAGE_ID,
+            VR::US,
+            PrimitiveValue::from(15_u16),
+        ));
 
         let parsed = DimseCommand::from_command_object(&command_object).unwrap();
 
@@ -273,6 +303,28 @@ mod tests {
         assert_eq!(parsed.priority, Some(Priority::High));
         assert_eq!(parsed.status, Some(0xFF00));
         assert_eq!(parsed.move_destination.as_deref(), Some("DEST_AE"));
+        assert_eq!(parsed.move_originator_ae_title.as_deref(), Some("MOVE_SCU"));
+        assert_eq!(parsed.move_originator_message_id, Some(15));
+    }
+
+    #[test]
+    fn c_store_does_not_fallback_to_requested_sop_uids() {
+        let mut command_object = base_command_object(0x0001, 0x0000);
+        command_object.command.put(DataElement::new(
+            tags::REQUESTED_SOP_CLASS_UID,
+            VR::UI,
+            "1.2.840.10008.5.1.4.1.1.2",
+        ));
+        command_object.command.put(DataElement::new(
+            tags::REQUESTED_SOP_INSTANCE_UID,
+            VR::UI,
+            "1.2.3.4",
+        ));
+
+        let parsed = DimseCommand::from_command_object(&command_object).unwrap();
+        assert_eq!(parsed.command_field, CommandField::CStoreRq);
+        assert!(parsed.sop_class_uid.is_none());
+        assert!(parsed.sop_instance_uid.is_none());
     }
 
     #[test]

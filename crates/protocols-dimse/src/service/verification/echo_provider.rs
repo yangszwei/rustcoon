@@ -25,8 +25,8 @@ impl ServiceClassProvider for VerificationServiceProvider {
 }
 
 impl DescribedServiceClassProvider for VerificationServiceProvider {
-    fn bindings(&self) -> &'static [ServiceBinding] {
-        const BINDINGS: [ServiceBinding; 1] = [ServiceBinding::new(
+    fn bindings(&self) -> &[ServiceBinding] {
+        static BINDINGS: [ServiceBinding; 1] = [ServiceBinding::new(
             CommandField::CEchoRq,
             VerificationServiceProvider::SOP_CLASS_UID,
         )];
@@ -48,6 +48,6 @@ mod tests {
 
         assert_eq!(bindings.len(), 1);
         assert_eq!(bindings[0].command_field, CommandField::CEchoRq);
-        assert_eq!(bindings[0].sop_class_uid, uids::VERIFICATION);
+        assert_eq!(bindings[0].sop_class_uid.as_ref(), uids::VERIFICATION);
     }
 }

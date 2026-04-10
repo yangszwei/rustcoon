@@ -106,6 +106,8 @@ mod tests {
             priority: None,
             status: None,
             move_destination: None,
+            move_originator_ae_title: None,
+            move_originator_message_id: None,
             has_data_set: false,
         }
     }
@@ -148,6 +150,28 @@ mod tests {
             error,
             crate::error::DimseError::Protocol(message)
                 if message.contains("C-ECHO-RQ must not include a data set")
+        ));
+    }
+
+    #[test]
+    fn echoes_default_verification_uid_when_command_omits_it() {
+        let mut command = echo_command();
+        command.sop_class_uid = None;
+
+        let request = CEchoRequest::from_command(&command).expect("verification uid defaults");
+        assert_eq!(request.affected_sop_class_uid, uids::VERIFICATION);
+    }
+
+    #[test]
+    fn rejects_echo_request_without_message_id() {
+        let mut command = echo_command();
+        command.message_id = None;
+
+        let error = CEchoRequest::from_command(&command).expect_err("message id required");
+        assert!(matches!(
+            error,
+            crate::error::DimseError::Protocol(message)
+                if message.contains("missing Message ID in C-ECHO-RQ")
         ));
     }
 }

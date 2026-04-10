@@ -6,14 +6,22 @@ edition.workspace = true
 [dependencies]
 dicom-core = "0.9.0"
 dicom-dictionary-std = "0.9.0"
+dicom-encoding = "0.9.0"
 dicom-object = "0.9.0"
 dicom-transfer-syntax-registry = "0.9.0"
 dicom-ul = "0.9.0"
+tempfile = "3.23.0"
 thiserror = "2.0.18"
+tokio = { version = "1.50.0", features = ["fs", "io-util", "rt"] }
 tracing.workspace = true
 
 rustcoon-application-entity = { path = "../domain-application-entity" }
+rustcoon-dicom = { path = "../domain-dicom" }
+rustcoon-ingest = { path = "../app-ingest" }
 rustcoon-ul = { path = "../protocols-ul" }
 
 [dev-dependencies]
+async-trait = "0.1.89"
 rustcoon-config = { path = "../platform-config" }
+rustcoon-index = { path = "../ports-index" }
+rustcoon-storage = { path = "../ports-storage" }
