@@ -19,6 +19,7 @@ rustcoon-application-entity = { path = "../domain-application-entity" }
 rustcoon-dicom = { path = "../domain-dicom" }
 rustcoon-ingest = { path = "../app-ingest" }
 rustcoon-query = { path = "../app-query" }
+rustcoon-retrieve = { path = "../app-retrieve" }
 rustcoon-ul = { path = "../protocols-ul" }
 
 [dev-dependencies]
