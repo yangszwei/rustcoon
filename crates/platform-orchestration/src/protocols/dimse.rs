@@ -1,75 +1,95 @@
+use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::sync::Arc;
 use std::time::Duration;
 
 use rustcoon_application_entity::ApplicationEntityRegistry;
-use rustcoon_dimse::{DimseError, DimseListener, ServiceClassRegistry};
+use rustcoon_dimse::{
+    DimseError, DimseListener, ServiceClassRegistry, StorageServiceProvider,
+    VerificationServiceProvider,
+};
+use rustcoon_ingest::IngestService;
 use rustcoon_runtime::FatalRuntimeError;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use tracing::{error, info, warn};
 
+use crate::core::OrchestratorError;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DimseServiceSelection {
+    pub verification: bool,
+    pub storage: bool,
+}
+
+impl DimseServiceSelection {
+    pub const fn monolith_default() -> Self {
+        Self {
+            verification: true,
+            storage: true,
+        }
+    }
+}
+
+/// Builds DIMSE registries using the requested provider selection profile.
+pub fn build_dimse_service_registries(
+    ae_registry: &ApplicationEntityRegistry,
+    ingest: Option<Arc<IngestService>>,
+    selection: DimseServiceSelection,
+) -> Result<HashMap<String, Arc<ServiceClassRegistry>>, OrchestratorError> {
+    if selection.storage && ingest.is_none() {
+        return Err(OrchestratorError::InvalidConfiguration(
+            "DIMSE storage service selected but ingest service is not initialized".to_string(),
+        ));
+    }
+
+    let mut registries = HashMap::new();
+    for local in ae_registry.locals() {
+        let mut service_registry = ServiceClassRegistry::new();
+        if selection.verification {
+            service_registry.register_described(Arc::new(VerificationServiceProvider));
+        }
+        if selection.storage {
+            let ingest = ingest
+                .as_ref()
+                .expect("validated: storage selection requires ingest service");
+            service_registry.register_described(Arc::new(
+                StorageServiceProvider::with_default_storage_sop_classes(Arc::clone(ingest)),
+            ));
+        }
+        registries.insert(
+            local.title().as_str().to_string(),
+            Arc::new(service_registry),
+        );
+    }
+    Ok(registries)
+}
+
+/// Starts a DIMSE listener task for a local AE and service registry.
 pub fn start_listener_for_ae(
     local_ae_title: String,
     ae_registry: Arc<ApplicationEntityRegistry>,
     service_registry: Arc<ServiceClassRegistry>,
-    accepted_abstract_syntaxes: Arc<Vec<String>>,
+    accepted_abstract_syntaxes: Vec<String>,
     shutdown: CancellationToken,
     task_tracker: &TaskTracker,
     fatal_tx: mpsc::UnboundedSender<FatalRuntimeError>,
 ) -> Result<(), DimseError> {
-    let listener = bind_listener(
-        Arc::clone(&ae_registry),
-        &local_ae_title,
-        Arc::clone(&accepted_abstract_syntaxes),
-    )?;
-    log_listener_started(&listener, &local_ae_title)?;
-    spawn_listener_task(
-        listener,
-        local_ae_title,
-        service_registry,
-        shutdown,
-        task_tracker,
-        fatal_tx,
-    );
-    Ok(())
-}
-
-fn bind_listener(
-    ae_registry: Arc<ApplicationEntityRegistry>,
-    local_ae_title: &str,
-    accepted_abstract_syntaxes: Arc<Vec<String>>,
-) -> Result<DimseListener, DimseError> {
-    DimseListener::bind_from_registry(ae_registry, local_ae_title)?
+    let listener = DimseListener::bind_from_registry(Arc::clone(&ae_registry), &local_ae_title)?
         .with_abstract_syntaxes(accepted_abstract_syntaxes.iter().map(String::as_str))
-        .with_nonblocking_accept()
-}
-
-fn log_listener_started(listener: &DimseListener, local_ae_title: &str) -> Result<(), DimseError> {
+        .with_nonblocking_accept()?;
     let listener_addr = listener.local_addr()?;
     info!(
         local_ae_title,
         bind_address = %listener_addr,
         "DIMSE listener started",
     );
-    Ok(())
-}
-
-fn spawn_listener_task(
-    listener: DimseListener,
-    local_ae_title: String,
-    provider: Arc<ServiceClassRegistry>,
-    shutdown: CancellationToken,
-    task_tracker: &TaskTracker,
-    fatal_tx: mpsc::UnboundedSender<FatalRuntimeError>,
-) {
-    let shutdown_for_listener = shutdown.clone();
-    let fatal_tx_for_listener = fatal_tx;
     task_tracker.spawn(async move {
-        let _keep_runtime_open = fatal_tx_for_listener;
-        listener_loop(listener, provider, shutdown_for_listener, local_ae_title).await;
+        let _keep_runtime_open = fatal_tx;
+        listener_loop(listener, service_registry, shutdown, local_ae_title).await;
     });
+    Ok(())
 }
 
 async fn listener_loop(
@@ -92,44 +112,30 @@ async fn listener_loop(
                 break;
             }
             join_result = &mut serve_task => {
-                let result = match join_result {
-                    Ok(result) => result,
-                    Err(join_error) => Err(DimseError::Protocol(format!(
+                let result = join_result.unwrap_or_else(|join_error| Err(DimseError::Protocol(format!(
                         "listener worker join failure: {join_error}"
-                    ))),
-                };
-                if is_accept_would_block(&result) {
-                    tokio::time::sleep(Duration::from_millis(50)).await;
-                    continue;
+                    ))));
+                match result {
+                    Err(DimseError::Ul(rustcoon_ul::UlError::Io(error)))
+                        if error.kind() == ErrorKind::WouldBlock =>
+                    {
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                    }
+                    Ok(()) => {}
+                    Err(DimseError::Ul(rustcoon_ul::UlError::Rejected)) => {
+                        warn!(local_ae_title, "association rejected by UL policy");
+                    }
+                    Err(error) => {
+                        error!(
+                            local_ae_title,
+                            error = %error,
+                            "listener loop error",
+                        );
+                    }
                 }
-                handle_listener_result(result, local_ae_title.as_str());
             }
         }
     }
-}
-
-fn handle_listener_result(result: Result<(), DimseError>, local_ae_title: &str) {
-    match result {
-        Ok(()) => {}
-        Err(DimseError::Ul(rustcoon_ul::UlError::Rejected)) => {
-            warn!(local_ae_title, "association rejected by UL policy",);
-        }
-        Err(error) => {
-            error!(
-                local_ae_title,
-                error = %error,
-                "listener loop error",
-            );
-        }
-    }
-}
-
-fn is_accept_would_block(result: &Result<(), DimseError>) -> bool {
-    matches!(
-        result,
-        Err(DimseError::Ul(rustcoon_ul::UlError::Io(error)))
-            if error.kind() == ErrorKind::WouldBlock
-    )
 }
 
 #[cfg(test)]
@@ -143,6 +149,7 @@ mod tests {
     };
     use rustcoon_dimse::{ServiceClassRegistry, VerificationServiceProvider};
 
+    use crate::protocols::dimse::{DimseServiceSelection, build_dimse_service_registries};
     use crate::start_listener_for_ae;
 
     fn local(title: &str, bind: std::net::SocketAddr) -> LocalApplicationEntityConfig {
@@ -188,7 +195,7 @@ mod tests {
             .expect("valid registry"),
         );
         let service_registry = service_registry();
-        let accepted = Arc::new(service_registry.supported_abstract_syntax_uids());
+        let accepted = service_registry.supported_abstract_syntax_uids();
         let shutdown = tokio_util::sync::CancellationToken::new();
         shutdown.cancel();
         let task_tracker = tokio_util::task::TaskTracker::new();
@@ -227,7 +234,7 @@ mod tests {
             .expect("valid registry"),
         );
         let service_registry = service_registry();
-        let accepted = Arc::new(service_registry.supported_abstract_syntax_uids());
+        let accepted = service_registry.supported_abstract_syntax_uids();
         let shutdown = tokio_util::sync::CancellationToken::new();
         let task_tracker = tokio_util::task::TaskTracker::new();
         let (fatal_tx, _fatal_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -246,6 +253,93 @@ mod tests {
             Err(rustcoon_dimse::DimseError::Ul(
                 rustcoon_ul::UlError::LocalAeNotFound(_)
             ))
+        ));
+    }
+
+    #[tokio::test]
+    async fn build_service_registries_creates_one_registry_per_local_ae() {
+        let mut config = rustcoon_config::MonolithConfig::default();
+        config.application_entities.local = vec![
+            local("RUSTCOON_A", "127.0.0.1:11112".parse().expect("valid addr")),
+            local("RUSTCOON_B", "127.0.0.1:11113".parse().expect("valid addr")),
+        ];
+        let ae_registry = ApplicationEntityRegistry::try_from_config(&config.application_entities)
+            .expect("valid AE registry");
+
+        let registries = build_dimse_service_registries(
+            &ae_registry,
+            None,
+            DimseServiceSelection {
+                verification: true,
+                storage: false,
+            },
+        )
+        .expect("service registries");
+
+        assert_eq!(registries.len(), 2);
+        let a = registries.get("RUSTCOON_A").expect("registry A");
+        let b = registries.get("RUSTCOON_B").expect("registry B");
+        assert!(!Arc::ptr_eq(a, b));
+        assert_eq!(
+            a.supported_abstract_syntax_uids(),
+            vec![VerificationServiceProvider::SOP_CLASS_UID.to_string()]
+        );
+        assert_eq!(
+            b.supported_abstract_syntax_uids(),
+            vec![VerificationServiceProvider::SOP_CLASS_UID.to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn build_service_registries_supports_selection_profiles() {
+        let mut config = rustcoon_config::MonolithConfig::default();
+        config.application_entities.local = vec![local(
+            "RUSTCOON_A",
+            "127.0.0.1:11112".parse().expect("valid addr"),
+        )];
+        let ae_registry = ApplicationEntityRegistry::try_from_config(&config.application_entities)
+            .expect("valid AE registry");
+
+        let registries = build_dimse_service_registries(
+            &ae_registry,
+            None,
+            DimseServiceSelection {
+                verification: true,
+                storage: false,
+            },
+        )
+        .expect("service registries");
+
+        assert_eq!(registries.len(), 1);
+        let registry = registries.get("RUSTCOON_A").expect("registry");
+        assert_eq!(
+            registry.supported_abstract_syntax_uids(),
+            vec![VerificationServiceProvider::SOP_CLASS_UID.to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn build_service_registries_fails_when_storage_selected_without_ingest() {
+        let mut config = rustcoon_config::MonolithConfig::default();
+        config.application_entities.local = vec![local(
+            "RUSTCOON_A",
+            "127.0.0.1:11112".parse().expect("valid addr"),
+        )];
+        let ae_registry = ApplicationEntityRegistry::try_from_config(&config.application_entities)
+            .expect("valid AE registry");
+
+        let result = build_dimse_service_registries(
+            &ae_registry,
+            None,
+            DimseServiceSelection {
+                verification: true,
+                storage: true,
+            },
+        );
+
+        assert!(matches!(
+            result,
+            Err(crate::OrchestratorError::InvalidConfiguration(_))
         ));
     }
 }

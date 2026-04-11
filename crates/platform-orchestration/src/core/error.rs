@@ -15,6 +15,9 @@ pub enum OrchestratorError {
     #[error("invalid configuration: {0}")]
     InvalidConfiguration(String),
 
+    #[error("infrastructure startup failed: {0}")]
+    Infrastructure(String),
+
     #[error("at least one local AE must be configured")]
     MissingLocalAe,
 }
@@ -38,6 +41,15 @@ mod tests {
     fn invalid_configuration_preserves_message() {
         let error = OrchestratorError::InvalidConfiguration("bad aes".to_string());
         assert_eq!(error.to_string(), "invalid configuration: bad aes");
+    }
+
+    #[test]
+    fn infrastructure_error_preserves_message() {
+        let error = OrchestratorError::Infrastructure("db unavailable".to_string());
+        assert_eq!(
+            error.to_string(),
+            "infrastructure startup failed: db unavailable"
+        );
     }
 
     #[test]

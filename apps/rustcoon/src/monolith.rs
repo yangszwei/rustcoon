@@ -2,9 +2,11 @@ use std::convert::Infallible;
 use std::sync::Arc;
 
 use rustcoon_application_entity::ApplicationEntityRegistry;
-use rustcoon_dimse::{ServiceClassRegistry, VerificationServiceProvider};
+use rustcoon_dimse::ServiceClassRegistry;
 use rustcoon_orchestration::{
-    OrchestratorError, init_telemetry, install_ctrl_c_handler, run_runtime, start_listener_for_ae,
+    DimseServiceSelection, OrchestratorError, build_blob_store, build_catalog_ports,
+    build_dimse_service_registries, build_ingest_service, init_telemetry, install_ctrl_c_handler,
+    run_runtime, start_listener_for_ae,
 };
 use rustcoon_runtime::{FatalRuntimeError, Runtime, RuntimeApp};
 use tokio::sync::mpsc;
@@ -16,8 +18,15 @@ pub async fn run() -> Result<(), OrchestratorError> {
     let _telemetry_guard = init_telemetry(&config.app.name, &config.telemetry)?;
 
     let ae_registry = build_ae_registry(&config)?;
-    let service_registry = build_service_registry();
-    let app = MonolithApp::new(ae_registry, service_registry);
+    let blob_store = build_blob_store(&config);
+    let catalog_ports = build_catalog_ports(&config).await?;
+    let ingest = build_ingest_service(blob_store.clone(), &catalog_ports);
+    let service_registries = build_dimse_service_registries(
+        ae_registry.as_ref(),
+        Some(ingest),
+        DimseServiceSelection::monolith_default(),
+    )?;
+    let app = MonolithApp::new(ae_registry, service_registries);
     let runtime = Runtime::new(app, config.runtime);
 
     install_ctrl_c_handler(runtime.shutdown_token());
@@ -27,17 +36,17 @@ pub async fn run() -> Result<(), OrchestratorError> {
 
 struct MonolithApp {
     ae_registry: Arc<ApplicationEntityRegistry>,
-    service_registry: Arc<ServiceClassRegistry>,
+    service_registries: std::collections::HashMap<String, Arc<ServiceClassRegistry>>,
 }
 
 impl MonolithApp {
     fn new(
         ae_registry: Arc<ApplicationEntityRegistry>,
-        service_registry: Arc<ServiceClassRegistry>,
+        service_registries: std::collections::HashMap<String, Arc<ServiceClassRegistry>>,
     ) -> Self {
         Self {
             ae_registry,
-            service_registry,
+            service_registries,
         }
     }
 
@@ -55,13 +64,17 @@ impl MonolithApp {
         fatal_tx: mpsc::UnboundedSender<FatalRuntimeError>,
     ) -> Result<(), rustcoon_dimse::DimseError> {
         for local_ae_title in self.local_ae_titles() {
-            let accepted_abstract_syntaxes = self.service_registry.supported_abstract_syntax_uids();
+            let service_registry = self
+                .service_registries
+                .get(&local_ae_title)
+                .expect("service registry should exist for every configured local AE");
+            let accepted_abstract_syntaxes = service_registry.supported_abstract_syntax_uids();
 
             start_listener_for_ae(
                 local_ae_title,
                 Arc::clone(&self.ae_registry),
-                Arc::clone(&self.service_registry),
-                Arc::clone(&Arc::new(accepted_abstract_syntaxes)),
+                Arc::clone(service_registry),
+                accepted_abstract_syntaxes,
                 shutdown.clone(),
                 task_tracker,
                 fatal_tx.clone(),
@@ -105,10 +118,4 @@ fn build_ae_registry(
         return Err(OrchestratorError::MissingLocalAe);
     }
     Ok(ae_registry)
-}
-
-fn build_service_registry() -> Arc<ServiceClassRegistry> {
-    let mut service_registry = ServiceClassRegistry::new();
-    service_registry.register_described(Arc::new(VerificationServiceProvider));
-    Arc::new(service_registry)
 }
