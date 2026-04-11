@@ -1985,6 +1985,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustcoon-query"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "dicom-core",
+ "dicom-dictionary-std",
+ "dicom-object",
+ "rustcoon-dicom",
+ "rustcoon-index",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "rustcoon-runtime"
 version = "0.1.0"
 dependencies = [
