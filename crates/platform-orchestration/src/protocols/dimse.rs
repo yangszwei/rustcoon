@@ -5,10 +5,11 @@ use std::time::Duration;
 
 use rustcoon_application_entity::ApplicationEntityRegistry;
 use rustcoon_dimse::{
-    DimseError, DimseListener, ServiceClassRegistry, StorageServiceProvider,
+    DimseError, DimseListener, QueryServiceProvider, ServiceClassRegistry, StorageServiceProvider,
     VerificationServiceProvider,
 };
 use rustcoon_ingest::IngestService;
+use rustcoon_query::QueryService;
 use rustcoon_runtime::FatalRuntimeError;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -20,6 +21,7 @@ use crate::core::OrchestratorError;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DimseServiceSelection {
     pub verification: bool,
+    pub query: bool,
     pub storage: bool,
 }
 
@@ -27,6 +29,7 @@ impl DimseServiceSelection {
     pub const fn monolith_default() -> Self {
         Self {
             verification: true,
+            query: true,
             storage: true,
         }
     }
@@ -36,11 +39,17 @@ impl DimseServiceSelection {
 pub fn build_dimse_service_registries(
     ae_registry: &ApplicationEntityRegistry,
     ingest: Option<Arc<IngestService>>,
+    query: Option<Arc<QueryService>>,
     selection: DimseServiceSelection,
 ) -> Result<HashMap<String, Arc<ServiceClassRegistry>>, OrchestratorError> {
     if selection.storage && ingest.is_none() {
         return Err(OrchestratorError::InvalidConfiguration(
             "DIMSE storage service selected but ingest service is not initialized".to_string(),
+        ));
+    }
+    if selection.query && query.is_none() {
+        return Err(OrchestratorError::InvalidConfiguration(
+            "DIMSE query service selected but query service is not initialized".to_string(),
         ));
     }
 
@@ -49,6 +58,15 @@ pub fn build_dimse_service_registries(
         let mut service_registry = ServiceClassRegistry::new();
         if selection.verification {
             service_registry.register_described(Arc::new(VerificationServiceProvider));
+        }
+        if selection.query {
+            let query = query
+                .as_ref()
+                .expect("validated: query selection requires query service");
+            service_registry.register_described(Arc::new(QueryServiceProvider::new(
+                Arc::clone(query),
+                local.title().as_str().to_string(),
+            )));
         }
         if selection.storage {
             let ingest = ingest
@@ -269,8 +287,10 @@ mod tests {
         let registries = build_dimse_service_registries(
             &ae_registry,
             None,
+            None,
             DimseServiceSelection {
                 verification: true,
+                query: false,
                 storage: false,
             },
         )
@@ -303,8 +323,10 @@ mod tests {
         let registries = build_dimse_service_registries(
             &ae_registry,
             None,
+            None,
             DimseServiceSelection {
                 verification: true,
+                query: false,
                 storage: false,
             },
         )
@@ -331,9 +353,38 @@ mod tests {
         let result = build_dimse_service_registries(
             &ae_registry,
             None,
+            None,
             DimseServiceSelection {
                 verification: true,
+                query: false,
                 storage: true,
+            },
+        );
+
+        assert!(matches!(
+            result,
+            Err(crate::OrchestratorError::InvalidConfiguration(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn build_service_registries_fails_when_query_selected_without_query_service() {
+        let mut config = rustcoon_config::MonolithConfig::default();
+        config.application_entities.local = vec![local(
+            "RUSTCOON_A",
+            "127.0.0.1:11112".parse().expect("valid addr"),
+        )];
+        let ae_registry = ApplicationEntityRegistry::try_from_config(&config.application_entities)
+            .expect("valid AE registry");
+
+        let result = build_dimse_service_registries(
+            &ae_registry,
+            None,
+            None,
+            DimseServiceSelection {
+                verification: true,
+                query: true,
+                storage: false,
             },
         );
 

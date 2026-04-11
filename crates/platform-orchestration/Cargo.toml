@@ -15,6 +15,7 @@ rustcoon-dimse = { path = "../protocols-dimse" }
 rustcoon-index = { path = "../ports-index" }
 rustcoon-index-postgres = { path = "../adapter-index-postgres" }
 rustcoon-ingest = { path = "../app-ingest" }
+rustcoon-query = { path = "../app-query" }
 rustcoon-runtime = { path = "../platform-runtime" }
 rustcoon-storage = { path = "../ports-storage" }
 rustcoon-storage-filesystem = { path = "../adapter-storage-filesystem" }

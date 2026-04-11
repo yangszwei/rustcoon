@@ -1974,6 +1974,7 @@ dependencies = [
  "rustcoon-index",
  "rustcoon-index-postgres",
  "rustcoon-ingest",
+ "rustcoon-query",
  "rustcoon-runtime",
  "rustcoon-storage",
  "rustcoon-storage-filesystem",
