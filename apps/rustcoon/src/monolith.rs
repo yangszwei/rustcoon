@@ -5,8 +5,9 @@ use rustcoon_application_entity::ApplicationEntityRegistry;
 use rustcoon_dimse::ServiceClassRegistry;
 use rustcoon_orchestration::{
     DimseServiceSelection, OrchestratorError, build_blob_store, build_catalog_ports,
-    build_dimse_service_registries, build_ingest_service, build_query_service, init_telemetry,
-    install_ctrl_c_handler, run_runtime, start_listener_for_ae,
+    build_dimse_service_registries, build_ingest_service, build_query_service,
+    build_retrieve_service, init_telemetry, install_ctrl_c_handler, run_runtime,
+    start_listener_for_ae,
 };
 use rustcoon_runtime::{FatalRuntimeError, Runtime, RuntimeApp};
 use tokio::sync::mpsc;
@@ -22,10 +23,12 @@ pub async fn run() -> Result<(), OrchestratorError> {
     let catalog_ports = build_catalog_ports(&config).await?;
     let ingest = build_ingest_service(blob_store.clone(), &catalog_ports);
     let query = build_query_service(&catalog_ports);
+    let retrieve = build_retrieve_service(blob_store.clone(), &catalog_ports);
     let service_registries = build_dimse_service_registries(
-        ae_registry.as_ref(),
+        Arc::clone(&ae_registry),
         Some(ingest),
         Some(query),
+        Some(retrieve),
         DimseServiceSelection::monolith_default(),
     )?;
     let app = MonolithApp::new(ae_registry, service_registries);

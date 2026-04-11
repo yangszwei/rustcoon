@@ -5,11 +5,12 @@ use std::time::Duration;
 
 use rustcoon_application_entity::ApplicationEntityRegistry;
 use rustcoon_dimse::{
-    DimseError, DimseListener, QueryServiceProvider, ServiceClassRegistry, StorageServiceProvider,
-    VerificationServiceProvider,
+    CGetServiceProvider, CMoveServiceProvider, DimseError, DimseListener, QueryServiceProvider,
+    ServiceClassRegistry, StorageServiceProvider, VerificationServiceProvider,
 };
 use rustcoon_ingest::IngestService;
 use rustcoon_query::QueryService;
+use rustcoon_retrieve::RetrieveService;
 use rustcoon_runtime::FatalRuntimeError;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -23,6 +24,7 @@ pub struct DimseServiceSelection {
     pub verification: bool,
     pub query: bool,
     pub storage: bool,
+    pub retrieve: bool,
 }
 
 impl DimseServiceSelection {
@@ -31,15 +33,17 @@ impl DimseServiceSelection {
             verification: true,
             query: true,
             storage: true,
+            retrieve: true,
         }
     }
 }
 
 /// Builds DIMSE registries using the requested provider selection profile.
 pub fn build_dimse_service_registries(
-    ae_registry: &ApplicationEntityRegistry,
+    ae_registry: Arc<ApplicationEntityRegistry>,
     ingest: Option<Arc<IngestService>>,
     query: Option<Arc<QueryService>>,
+    retrieve: Option<Arc<RetrieveService>>,
     selection: DimseServiceSelection,
 ) -> Result<HashMap<String, Arc<ServiceClassRegistry>>, OrchestratorError> {
     if selection.storage && ingest.is_none() {
@@ -50,6 +54,11 @@ pub fn build_dimse_service_registries(
     if selection.query && query.is_none() {
         return Err(OrchestratorError::InvalidConfiguration(
             "DIMSE query service selected but query service is not initialized".to_string(),
+        ));
+    }
+    if selection.retrieve && retrieve.is_none() {
+        return Err(OrchestratorError::InvalidConfiguration(
+            "DIMSE retrieve service selected but retrieve service is not initialized".to_string(),
         ));
     }
 
@@ -75,6 +84,17 @@ pub fn build_dimse_service_registries(
             service_registry.register_described(Arc::new(
                 StorageServiceProvider::with_default_storage_sop_classes(Arc::clone(ingest)),
             ));
+        }
+        if selection.retrieve {
+            let retrieve = retrieve
+                .as_ref()
+                .expect("validated: retrieve selection requires retrieve service");
+            service_registry
+                .register_described(Arc::new(CGetServiceProvider::new(Arc::clone(retrieve))));
+            service_registry.register_described(Arc::new(CMoveServiceProvider::new(
+                Arc::clone(retrieve),
+                Arc::clone(&ae_registry),
+            )));
         }
         registries.insert(
             local.title().as_str().to_string(),
@@ -281,17 +301,21 @@ mod tests {
             local("RUSTCOON_A", "127.0.0.1:11112".parse().expect("valid addr")),
             local("RUSTCOON_B", "127.0.0.1:11113".parse().expect("valid addr")),
         ];
-        let ae_registry = ApplicationEntityRegistry::try_from_config(&config.application_entities)
-            .expect("valid AE registry");
+        let ae_registry = Arc::new(
+            ApplicationEntityRegistry::try_from_config(&config.application_entities)
+                .expect("valid AE registry"),
+        );
 
         let registries = build_dimse_service_registries(
-            &ae_registry,
+            Arc::clone(&ae_registry),
+            None,
             None,
             None,
             DimseServiceSelection {
                 verification: true,
                 query: false,
                 storage: false,
+                retrieve: false,
             },
         )
         .expect("service registries");
@@ -317,17 +341,21 @@ mod tests {
             "RUSTCOON_A",
             "127.0.0.1:11112".parse().expect("valid addr"),
         )];
-        let ae_registry = ApplicationEntityRegistry::try_from_config(&config.application_entities)
-            .expect("valid AE registry");
+        let ae_registry = Arc::new(
+            ApplicationEntityRegistry::try_from_config(&config.application_entities)
+                .expect("valid AE registry"),
+        );
 
         let registries = build_dimse_service_registries(
-            &ae_registry,
+            Arc::clone(&ae_registry),
+            None,
             None,
             None,
             DimseServiceSelection {
                 verification: true,
                 query: false,
                 storage: false,
+                retrieve: false,
             },
         )
         .expect("service registries");
@@ -347,17 +375,21 @@ mod tests {
             "RUSTCOON_A",
             "127.0.0.1:11112".parse().expect("valid addr"),
         )];
-        let ae_registry = ApplicationEntityRegistry::try_from_config(&config.application_entities)
-            .expect("valid AE registry");
+        let ae_registry = Arc::new(
+            ApplicationEntityRegistry::try_from_config(&config.application_entities)
+                .expect("valid AE registry"),
+        );
 
         let result = build_dimse_service_registries(
-            &ae_registry,
+            Arc::clone(&ae_registry),
+            None,
             None,
             None,
             DimseServiceSelection {
                 verification: true,
                 query: false,
                 storage: true,
+                retrieve: false,
             },
         );
 
@@ -374,17 +406,21 @@ mod tests {
             "RUSTCOON_A",
             "127.0.0.1:11112".parse().expect("valid addr"),
         )];
-        let ae_registry = ApplicationEntityRegistry::try_from_config(&config.application_entities)
-            .expect("valid AE registry");
+        let ae_registry = Arc::new(
+            ApplicationEntityRegistry::try_from_config(&config.application_entities)
+                .expect("valid AE registry"),
+        );
 
         let result = build_dimse_service_registries(
-            &ae_registry,
+            Arc::clone(&ae_registry),
+            None,
             None,
             None,
             DimseServiceSelection {
                 verification: true,
                 query: true,
                 storage: false,
+                retrieve: false,
             },
         );
 

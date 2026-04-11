@@ -8,6 +8,7 @@ pub use core::error::OrchestratorError;
 
 pub use app::ingest::build_ingest_service;
 pub use app::query::build_query_service;
+pub use app::retrieve::build_retrieve_service;
 pub use infrastructure::index::build_catalog_ports;
 pub use infrastructure::storage::build_blob_store;
 pub use protocols::dimse::{
