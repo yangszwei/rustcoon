@@ -5,9 +5,11 @@
 
 pub mod app;
 pub mod application_entity;
+pub mod database;
 pub mod error;
 pub mod monolith;
 pub mod runtime;
+pub mod storage;
 pub mod telemetry;
 
 pub use error::ConfigError;

@@ -1,5 +1,7 @@
 /target
 
+/data
+
 /config/*.toml
 !/config/*.example.toml
 /rustcoon.toml

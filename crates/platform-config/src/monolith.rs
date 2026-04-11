@@ -4,7 +4,9 @@ use serde::Deserialize;
 use crate::ConfigError;
 use crate::app::AppConfig;
 use crate::application_entity::ApplicationEntitiesConfig;
+use crate::database::DatabaseConfig;
 use crate::runtime::RuntimeConfig;
+use crate::storage::{FilesystemConfig, StorageConfig};
 use crate::telemetry::TelemetryConfig;
 
 /// Top-level configuration for the monolith runtime.
@@ -22,6 +24,15 @@ pub struct MonolithConfig {
 
     /// Runtime lifecycle configuration.
     pub runtime: RuntimeConfig,
+
+    /// Shared database backend configuration.
+    pub database: DatabaseConfig,
+
+    /// Shared filesystem settings for filesystem-backed features.
+    pub filesystem: FilesystemConfig,
+
+    /// Selected blob storage backend configuration.
+    pub storage: StorageConfig,
 
     /// Telemetry configuration, including logs, traces, and metrics.
     pub telemetry: TelemetryConfig,

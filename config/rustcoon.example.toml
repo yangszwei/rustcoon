@@ -5,6 +5,17 @@ name = "rustcoon"
 shutdown_timeout_seconds = 30
 force_exit_on_timeout = false
 
+[database]
+type = "postgres"
+connection_string = "postgres://postgres:postgres@127.0.0.1:5432/rustcoon"
+max_connections = 10
+
+[filesystem]
+root = "data"
+
+[storage]
+type = "filesystem"
+
 [telemetry]
 log_level = "info"
 log_format = "json"
