@@ -1,0 +1,19 @@
+[package]
+name = "rustcoon-retrieve"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+dicom-core = "0.9.0"
+dicom-dictionary-std = "0.9.0"
+dicom-object = "0.9.0"
+thiserror = "2.0.18"
+
+rustcoon-dicom = { path = "../domain-dicom" }
+rustcoon-index = { path = "../ports-index" }
+rustcoon-storage = { path = "../ports-storage" }
+
+[dev-dependencies]
+async-trait = "0.1.89"
+dicom-object = "0.9.0"
+tokio = { version = "1.50.0", features = ["macros", "rt"] }
