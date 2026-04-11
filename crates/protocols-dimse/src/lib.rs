@@ -17,7 +17,8 @@ pub use error_handler::{DefaultErrorHandler, ErrorHandlerAction, ListenerErrorHa
 pub use listener::DimseListener;
 pub use message::{CommandObject, DimseReader, DimseWriter};
 pub use service::{
-    CEchoRequest, CEchoResponse, CStoreRequest, CStoreResponse, CStoreStatus, CommandField,
-    DescribedServiceClassProvider, DimseCommand, Priority, ServiceBinding, ServiceClassProvider,
-    ServiceClassRegistry, StorageServiceProvider, VerificationServiceProvider,
+    CEchoRequest, CEchoResponse, CFindRequest, CFindResponse, CFindStatus, CStoreRequest,
+    CStoreResponse, CStoreStatus, CommandField, DescribedServiceClassProvider, DimseCommand,
+    Priority, QueryServiceProvider, ServiceBinding, ServiceClassProvider, ServiceClassRegistry,
+    StorageServiceProvider, VerificationServiceProvider,
 };

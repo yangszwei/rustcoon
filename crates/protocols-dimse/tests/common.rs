@@ -10,8 +10,6 @@ use rustcoon_config::application_entity::{
 };
 use rustcoon_ul::{OutboundAssociationRequest, UlAssociation, UlListener};
 
-pub const VERIFICATION_SOP_CLASS: &str = "1.2.840.10008.1.1";
-
 fn local(title: &str, bind: SocketAddr) -> LocalApplicationEntityConfig {
     LocalApplicationEntityConfig {
         title: title.to_string(),

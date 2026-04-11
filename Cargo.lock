@@ -1908,6 +1908,7 @@ dependencies = [
  "rustcoon-dicom",
  "rustcoon-index",
  "rustcoon-ingest",
+ "rustcoon-query",
  "rustcoon-storage",
  "rustcoon-ul",
  "tempfile",

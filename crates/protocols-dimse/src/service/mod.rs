@@ -1,11 +1,13 @@
 use std::borrow::Cow;
 
 mod command;
+mod query;
 mod registry;
 mod store;
 mod verification;
 
 pub use command::{CommandField, DimseCommand, Priority};
+pub use query::{CFindRequest, CFindResponse, CFindStatus, QueryServiceProvider};
 pub use registry::ServiceClassRegistry;
 pub use store::{CStoreRequest, CStoreResponse, CStoreStatus, StorageServiceProvider};
 pub use verification::{CEchoRequest, CEchoResponse, VerificationServiceProvider};

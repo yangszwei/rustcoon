@@ -21,7 +21,9 @@ use rustcoon_dimse::{
 use rustcoon_ul::OutboundAssociationRequest;
 
 mod common;
-use common::{VERIFICATION_SOP_CLASS, setup_ul_pair};
+use common::setup_ul_pair;
+
+const VERIFICATION_SOP_CLASS: &str = "1.2.840.10008.1.1";
 
 fn local(title: &str, bind: SocketAddr) -> LocalApplicationEntityConfig {
     LocalApplicationEntityConfig {
