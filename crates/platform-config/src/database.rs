@@ -15,11 +15,14 @@ pub struct DatabaseConfig {
 pub enum DatabaseBackendConfig {
     /// Postgres-backed database connectivity settings.
     Postgres(PostgresDatabaseConfig),
+
+    /// SQLite-backed database connectivity settings.
+    Sqlite(SqliteDatabaseConfig),
 }
 
 impl Default for DatabaseBackendConfig {
     fn default() -> Self {
-        Self::Postgres(PostgresDatabaseConfig::default())
+        Self::Sqlite(SqliteDatabaseConfig::default())
     }
 }
 
@@ -43,14 +46,30 @@ impl Default for PostgresDatabaseConfig {
     }
 }
 
+/// SQLite database connection settings shared by runtime services.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct SqliteDatabaseConfig {
+    /// Maximum size of the SQLite connection pool.
+    pub max_connections: u32,
+}
+
+impl Default for SqliteDatabaseConfig {
+    fn default() -> Self {
+        Self { max_connections: 1 }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{DatabaseBackendConfig, DatabaseConfig, PostgresDatabaseConfig};
+    use super::{
+        DatabaseBackendConfig, DatabaseConfig, PostgresDatabaseConfig, SqliteDatabaseConfig,
+    };
 
     #[test]
-    fn database_defaults_to_postgres_backend() {
+    fn database_defaults_to_sqlite_backend() {
         let config = DatabaseConfig::default();
-        assert!(matches!(config.backend, DatabaseBackendConfig::Postgres(_)));
+        assert!(matches!(config.backend, DatabaseBackendConfig::Sqlite(_)));
     }
 
     #[test]
@@ -67,5 +86,17 @@ mod tests {
     fn postgres_backend_can_be_constructed() {
         let backend = DatabaseBackendConfig::Postgres(PostgresDatabaseConfig::default());
         assert!(matches!(backend, DatabaseBackendConfig::Postgres(_)));
+    }
+
+    #[test]
+    fn sqlite_defaults_are_sensible_for_local_development() {
+        let config = SqliteDatabaseConfig::default();
+        assert_eq!(config.max_connections, 1);
+    }
+
+    #[test]
+    fn sqlite_backend_can_be_constructed() {
+        let backend = DatabaseBackendConfig::Sqlite(SqliteDatabaseConfig::default());
+        assert!(matches!(backend, DatabaseBackendConfig::Sqlite(_)));
     }
 }

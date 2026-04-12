@@ -10,9 +10,13 @@ global_max_concurrent_associations = 1024
 permit_wait_timeout_seconds = 5
 
 [database]
-type = "postgres"
-connection_string = "postgres://postgres:postgres@127.0.0.1:5432/rustcoon"
+type = "sqlite"
 max_connections = 10
+
+# [database]
+# type = "postgres"
+# connection_string = "postgres://postgres:postgres@127.0.0.1:5432/rustcoon"
+# max_connections = 10
 
 [filesystem]
 root = "data"

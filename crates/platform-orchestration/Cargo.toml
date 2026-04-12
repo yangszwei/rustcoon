@@ -14,6 +14,7 @@ rustcoon-config = { path = "../platform-config" }
 rustcoon-dimse = { path = "../protocols-dimse" }
 rustcoon-index = { path = "../ports-index" }
 rustcoon-index-postgres = { path = "../adapter-index-postgres" }
+rustcoon-index-sqlite = { path = "../adapter-index-sqlite" }
 rustcoon-ingest = { path = "../app-ingest" }
 rustcoon-query = { path = "../app-query" }
 rustcoon-retrieve = { path = "../app-retrieve" }
