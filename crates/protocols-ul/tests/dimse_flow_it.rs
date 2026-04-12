@@ -22,6 +22,7 @@ fn local_cfg(title: &str, bind_address: SocketAddr) -> LocalApplicationEntityCon
         read_timeout_seconds: Some(30),
         write_timeout_seconds: Some(30),
         max_pdu_length: 16_384,
+        max_concurrent_associations: 64,
     }
 }
 
@@ -36,7 +37,8 @@ fn remote_cfg(title: &str, address: SocketAddr) -> RemoteApplicationEntityConfig
     }
 }
 
-fn setup_listener_or_skip() -> Option<(UlListener, Arc<ApplicationEntityRegistry>, SocketAddr)> {
+async fn setup_listener_or_skip() -> Option<(UlListener, Arc<ApplicationEntityRegistry>, SocketAddr)>
+{
     let inbound_registry = Arc::new(
         ApplicationEntityRegistry::try_from_config(&ApplicationEntitiesConfig {
             local: vec![local_cfg("REMOTE_SCP", "127.0.0.1:0".parse().unwrap())],
@@ -45,12 +47,12 @@ fn setup_listener_or_skip() -> Option<(UlListener, Arc<ApplicationEntityRegistry
         .unwrap(),
     );
 
-    let listener = match UlListener::bind_from_registry(Arc::clone(&inbound_registry), "REMOTE_SCP")
-    {
-        Ok(listener) => listener.with_abstract_syntax(VERIFICATION_SOP_CLASS),
-        Err(UlError::Io(error)) if error.kind() == ErrorKind::PermissionDenied => return None,
-        Err(error) => panic!("listener bind should succeed: {error}"),
-    };
+    let listener =
+        match UlListener::bind_from_registry(Arc::clone(&inbound_registry), "REMOTE_SCP").await {
+            Ok(listener) => listener.with_abstract_syntax(VERIFICATION_SOP_CLASS),
+            Err(UlError::Io(error)) if error.kind() == ErrorKind::PermissionDenied => return None,
+            Err(error) => panic!("listener bind should succeed: {error}"),
+        };
 
     let listen_addr = listener
         .local_addr()
@@ -78,30 +80,30 @@ async fn await_server(handle: JoinHandle<ServerThreadResult>) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn route_driven_dimse_like_pdata_flow_works() {
-    let Some((listener, _inbound_registry, listen_addr)) = setup_listener_or_skip() else {
+    let Some((listener, _inbound_registry, listen_addr)) = setup_listener_or_skip().await else {
         return;
     };
     let outbound_registry = outbound_registry_for(listen_addr);
 
-    let server = tokio::task::spawn_blocking(move || -> ServerThreadResult {
-        let (mut association, _peer_addr) = listener.accept()?;
+    let server: JoinHandle<ServerThreadResult> = tokio::spawn(async move {
+        let (mut association, _peer_addr) = listener.accept().await?;
 
         assert_eq!(association.role(), AssociationRole::Acceptor);
         assert!(!association.presentation_contexts().is_empty());
         assert_eq!(association.local_max_pdu_length(), 16_384);
         assert_eq!(association.peer_max_pdu_length(), 16_384);
 
-        let pdu = association.receive_pdu()?;
+        let pdu = association.receive_pdu().await?;
         assert!(matches!(pdu, Pdu::PData { .. }));
 
-        let pdu = association.receive_pdu()?;
+        let pdu = association.receive_pdu().await?;
         assert!(matches!(pdu, Pdu::ReleaseRQ));
-        association.send_pdu(&Pdu::ReleaseRP)?;
+        association.send_pdu(&Pdu::ReleaseRP).await?;
         Ok(())
     });
 
     let outbound_registry_for_client = Arc::clone(&outbound_registry);
-    let client = tokio::task::spawn_blocking(move || -> Result<(), UlError> {
+    let client: JoinHandle<Result<(), UlError>> = tokio::spawn(async move {
         let source: AeTitle = "LOCAL_SCU".parse().unwrap();
         let destination: AeTitle = "REMOTE_SCP".parse().unwrap();
         let route = outbound_registry_for_client
@@ -112,16 +114,17 @@ async fn route_driven_dimse_like_pdata_flow_works() {
             &route,
             outbound_registry_for_client.as_ref(),
             [VERIFICATION_SOP_CLASS],
-        )?;
+        )
+        .await?;
 
         assert_eq!(association.role(), AssociationRole::Requestor);
         assert!(!association.presentation_contexts().is_empty());
         assert_eq!(association.local_max_pdu_length(), 16_384);
         assert_eq!(association.peer_max_pdu_length(), 16_384);
 
-        association.send_pdu(&Pdu::PData { data: vec![] })?;
-        association.send_pdu(&Pdu::ReleaseRQ)?;
-        let pdu = association.receive_pdu()?;
+        association.send_pdu(&Pdu::PData { data: vec![] }).await?;
+        association.send_pdu(&Pdu::ReleaseRQ).await?;
+        let pdu = association.receive_pdu().await?;
         assert!(matches!(pdu, Pdu::ReleaseRP));
         Ok(())
     });
@@ -133,19 +136,19 @@ async fn route_driven_dimse_like_pdata_flow_works() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn acceptor_release_path_completes_gracefully() {
-    let Some((listener, _inbound_registry, listen_addr)) = setup_listener_or_skip() else {
+    let Some((listener, _inbound_registry, listen_addr)) = setup_listener_or_skip().await else {
         return;
     };
     let outbound_registry = outbound_registry_for(listen_addr);
 
-    let server = tokio::task::spawn_blocking(move || -> ServerThreadResult {
-        let (association, _peer_addr) = listener.accept()?;
-        association.release()?;
+    let server: JoinHandle<ServerThreadResult> = tokio::spawn(async move {
+        let (association, _peer_addr) = listener.accept().await?;
+        association.release().await?;
         Ok(())
     });
 
     let outbound_registry_for_client = Arc::clone(&outbound_registry);
-    let client = tokio::task::spawn_blocking(move || -> Result<(), UlError> {
+    let client: JoinHandle<Result<(), UlError>> = tokio::spawn(async move {
         let source: AeTitle = "LOCAL_SCU".parse().unwrap();
         let destination: AeTitle = "REMOTE_SCP".parse().unwrap();
         let route = outbound_registry_for_client
@@ -156,11 +159,12 @@ async fn acceptor_release_path_completes_gracefully() {
             &route,
             outbound_registry_for_client.as_ref(),
             [VERIFICATION_SOP_CLASS],
-        )?;
+        )
+        .await?;
 
-        let pdu = association.receive_pdu()?;
+        let pdu = association.receive_pdu().await?;
         assert!(matches!(pdu, Pdu::ReleaseRQ));
-        association.send_pdu(&Pdu::ReleaseRP)?;
+        association.send_pdu(&Pdu::ReleaseRP).await?;
         Ok(())
     });
 
@@ -171,20 +175,21 @@ async fn acceptor_release_path_completes_gracefully() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn unknown_calling_ae_is_rejected_by_registry_policy() {
-    let Some((listener, _inbound_registry, listen_addr)) = setup_listener_or_skip() else {
+    let Some((listener, _inbound_registry, listen_addr)) = setup_listener_or_skip().await else {
         return;
     };
 
-    let server = tokio::task::spawn_blocking(move || -> ServerThreadResult {
-        let result = listener.accept();
+    let server: JoinHandle<ServerThreadResult> = tokio::spawn(async move {
+        let result = listener.accept().await;
         assert!(result.is_err(), "server should reject unknown caller");
         Ok(())
     });
 
-    let client = tokio::task::spawn_blocking(move || -> Result<(), UlError> {
+    let client: JoinHandle<Result<(), UlError>> = tokio::spawn(async move {
         let result = OutboundAssociationRequest::new("UNKNOWN_SCU", "REMOTE_SCP", listen_addr)
             .with_abstract_syntax(VERIFICATION_SOP_CLASS)
-            .establish();
+            .establish()
+            .await;
         assert!(
             matches!(result, Err(UlError::Rejected) | Err(UlError::Ul(_))),
             "client should be rejected, got: {result:?}"
@@ -199,14 +204,14 @@ async fn unknown_calling_ae_is_rejected_by_registry_policy() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn requestor_abort_path_works() {
-    let Some((listener, _inbound_registry, listen_addr)) = setup_listener_or_skip() else {
+    let Some((listener, _inbound_registry, listen_addr)) = setup_listener_or_skip().await else {
         return;
     };
     let outbound_registry = outbound_registry_for(listen_addr);
 
-    let server = tokio::task::spawn_blocking(move || -> ServerThreadResult {
-        let (mut association, _peer_addr) = listener.accept()?;
-        let observed = association.receive_pdu();
+    let server: JoinHandle<ServerThreadResult> = tokio::spawn(async move {
+        let (mut association, _peer_addr) = listener.accept().await?;
+        let observed = association.receive_pdu().await;
         assert!(
             matches!(
                 observed,
@@ -218,7 +223,7 @@ async fn requestor_abort_path_works() {
     });
 
     let outbound_registry_for_client = Arc::clone(&outbound_registry);
-    let client = tokio::task::spawn_blocking(move || -> Result<(), UlError> {
+    let client: JoinHandle<Result<(), UlError>> = tokio::spawn(async move {
         let route = outbound_registry_for_client
             .plan_outbound(
                 &"LOCAL_SCU".parse().unwrap(),
@@ -229,8 +234,9 @@ async fn requestor_abort_path_works() {
             &route,
             outbound_registry_for_client.as_ref(),
             [VERIFICATION_SOP_CLASS],
-        )?;
-        association.abort()?;
+        )
+        .await?;
+        association.abort().await?;
         Ok(())
     });
 
@@ -241,19 +247,19 @@ async fn requestor_abort_path_works() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn acceptor_abort_path_works() {
-    let Some((listener, _inbound_registry, listen_addr)) = setup_listener_or_skip() else {
+    let Some((listener, _inbound_registry, listen_addr)) = setup_listener_or_skip().await else {
         return;
     };
     let outbound_registry = outbound_registry_for(listen_addr);
 
-    let server = tokio::task::spawn_blocking(move || -> ServerThreadResult {
-        let (association, _peer_addr) = listener.accept()?;
-        association.abort()?;
+    let server: JoinHandle<ServerThreadResult> = tokio::spawn(async move {
+        let (association, _peer_addr) = listener.accept().await?;
+        association.abort().await?;
         Ok(())
     });
 
     let outbound_registry_for_client = Arc::clone(&outbound_registry);
-    let client = tokio::task::spawn_blocking(move || -> Result<(), UlError> {
+    let client: JoinHandle<Result<(), UlError>> = tokio::spawn(async move {
         let route = outbound_registry_for_client
             .plan_outbound(
                 &"LOCAL_SCU".parse().unwrap(),
@@ -264,9 +270,10 @@ async fn acceptor_abort_path_works() {
             &route,
             outbound_registry_for_client.as_ref(),
             [VERIFICATION_SOP_CLASS],
-        )?;
+        )
+        .await?;
 
-        let observed = association.receive_pdu();
+        let observed = association.receive_pdu().await;
         assert!(
             matches!(
                 observed,

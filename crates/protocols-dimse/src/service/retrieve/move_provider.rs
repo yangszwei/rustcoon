@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use dicom_dictionary_std::tags;
 use rustcoon_application_entity::{AeTitle, ApplicationEntityRegistry};
 use rustcoon_retrieve::{RetrieveError, RetrieveQueryModel, RetrieveService};
@@ -9,7 +10,7 @@ use crate::context::AssociationContext;
 use crate::error::DimseError;
 use crate::instrumentation::{DimseErrorClass, record_suboperation};
 use crate::service::retrieve::common::{
-    StoreSubOperationStatus, block_on_retrieve, build_retrieve_request, read_identifier_data_set,
+    StoreSubOperationStatus, build_retrieve_request, read_identifier_data_set,
     send_store_sub_operation,
 };
 use crate::service::retrieve::{CMoveRequest, CMoveResponse, CMoveStatus};
@@ -37,9 +38,10 @@ impl CMoveServiceProvider {
     }
 }
 
+#[async_trait]
 impl ServiceClassProvider for CMoveServiceProvider {
-    fn handle(&self, ctx: &mut AssociationContext) -> Result<(), DimseError> {
-        let request = CMoveRequest::from_command(&ctx.read_command()?)?;
+    async fn handle(&self, ctx: &mut AssociationContext) -> Result<(), DimseError> {
+        let request = CMoveRequest::from_command(&ctx.read_command().await?)?;
         tracing::debug!(stage = "validate", "C-MOVE request validated");
 
         let Some(model) = retrieve_model_for_move_sop_class_uid(&request.affected_sop_class_uid)
@@ -51,7 +53,8 @@ impl ServiceClassProvider for CMoveServiceProvider {
             ctx.send_command_object(
                 request.presentation_context_id,
                 &response.to_command_object(),
-            )?;
+            )
+            .await?;
             ctx.record_response_status(CMoveStatus::IdentifierDoesNotMatchSopClass.code());
             ctx.record_response_error_class(DimseErrorClass::new(
                 "service",
@@ -64,7 +67,9 @@ impl ServiceClassProvider for CMoveServiceProvider {
             ctx,
             request.presentation_context_id,
             &request.affected_sop_class_uid,
-        ) {
+        )
+        .await
+        {
             Ok(identifier) => {
                 tracing::debug!(stage = "identifier_decoded", "C-MOVE identifier decoded");
                 identifier
@@ -75,7 +80,8 @@ impl ServiceClassProvider for CMoveServiceProvider {
                 ctx.send_command_object(
                     request.presentation_context_id,
                     &response.to_command_object(),
-                )?;
+                )
+                .await?;
                 ctx.record_response_status(CMoveStatus::UnableToProcess.code());
                 ctx.record_response_error_class(DimseErrorClass::new("service", "invalid_dataset"));
                 return Ok(());
@@ -96,7 +102,8 @@ impl ServiceClassProvider for CMoveServiceProvider {
                 ctx.send_command_object(
                     request.presentation_context_id,
                     &response.to_command_object(),
-                )?;
+                )
+                .await?;
                 ctx.record_response_status(CMoveStatus::IdentifierDoesNotMatchSopClass.code());
                 ctx.record_response_error_class(DimseErrorClass::new("service", "invalid_dataset"));
                 return Ok(());
@@ -108,7 +115,7 @@ impl ServiceClassProvider for CMoveServiceProvider {
             backend = "retrieve",
             "C-MOVE retrieve plan started"
         );
-        let plan = block_on_retrieve(self.retrieve.plan(app_request));
+        let plan = self.retrieve.plan(app_request).await;
         let response = match plan {
             Ok(plan) if plan.total_suboperations == 0 => {
                 tracing::debug!(
@@ -134,7 +141,8 @@ impl ServiceClassProvider for CMoveServiceProvider {
                     ctx.send_command_object(
                         request.presentation_context_id,
                         &response.to_command_object(),
-                    )?;
+                    )
+                    .await?;
                     ctx.record_response_status(CMoveStatus::UnableToProcess.code());
                     ctx.record_response_error_class(DimseErrorClass::new(
                         "service",
@@ -153,7 +161,8 @@ impl ServiceClassProvider for CMoveServiceProvider {
                         ctx.send_command_object(
                             request.presentation_context_id,
                             &response.to_command_object(),
-                        )?;
+                        )
+                        .await?;
                         ctx.record_response_status(CMoveStatus::MoveDestinationUnknown.code());
                         ctx.record_response_error_class(DimseErrorClass::new(
                             "service",
@@ -171,7 +180,8 @@ impl ServiceClassProvider for CMoveServiceProvider {
                     ctx.send_command_object(
                         request.presentation_context_id,
                         &response.to_command_object(),
-                    )?;
+                    )
+                    .await?;
                     ctx.record_response_status(CMoveStatus::MoveDestinationUnknown.code());
                     ctx.record_response_error_class(DimseErrorClass::new(
                         "service",
@@ -193,7 +203,8 @@ impl ServiceClassProvider for CMoveServiceProvider {
                         ctx.send_command_object(
                             request.presentation_context_id,
                             &response.to_command_object(),
-                        )?;
+                        )
+                        .await?;
                         ctx.record_response_status(CMoveStatus::MoveDestinationUnknown.code());
                         ctx.record_response_error_class(DimseErrorClass::new(
                             "service",
@@ -211,7 +222,9 @@ impl ServiceClassProvider for CMoveServiceProvider {
                     &route,
                     self.ae_registry.as_ref(),
                     storage_sop_classes,
-                ) {
+                )
+                .await
+                {
                     Ok(association) => association,
                     Err(_) => {
                         let response = CMoveResponse::for_request(
@@ -222,7 +235,8 @@ impl ServiceClassProvider for CMoveServiceProvider {
                         ctx.send_command_object(
                             request.presentation_context_id,
                             &response.to_command_object(),
-                        )?;
+                        )
+                        .await?;
                         ctx.record_response_status(CMoveStatus::MoveDestinationUnknown.code());
                         ctx.record_response_error_class(DimseErrorClass::new(
                             "ul",
@@ -250,7 +264,9 @@ impl ServiceClassProvider for CMoveServiceProvider {
                         candidate,
                         message_id,
                         Some((move_originator_ae_title.as_str(), request.message_id)),
-                    )? {
+                    )
+                    .await?
+                    {
                         StoreSubOperationStatus::Completed => {
                             record_suboperation("c_move_store", "completed");
                             completed = completed.saturating_add(1)
@@ -273,11 +289,12 @@ impl ServiceClassProvider for CMoveServiceProvider {
                         ctx.send_command_object(
                             request.presentation_context_id,
                             &pending.to_command_object(),
-                        )?;
+                        )
+                        .await?;
                     }
                 }
 
-                let _ = move_ctx.into_association().release();
+                let _ = move_ctx.into_association().release().await;
                 let status = if failed > 0 || warning > 0 {
                     CMoveStatus::Warning
                 } else {
@@ -306,7 +323,8 @@ impl ServiceClassProvider for CMoveServiceProvider {
         ctx.send_command_object(
             request.presentation_context_id,
             &response.to_command_object(),
-        )?;
+        )
+        .await?;
         ctx.record_response_status(status);
         tracing::debug!(
             stage = "response",

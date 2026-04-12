@@ -374,6 +374,7 @@ dependencies = [
  "dicom-encoding",
  "dicom-transfer-syntax-registry",
  "snafu",
+ "tokio",
  "tracing",
 ]
 

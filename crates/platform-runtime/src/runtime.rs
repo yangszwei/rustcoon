@@ -309,6 +309,7 @@ mod tests {
         RuntimeConfig {
             shutdown_timeout_seconds: timeout_seconds,
             force_exit_on_timeout,
+            dimse: Default::default(),
         }
     }
 

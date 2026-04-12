@@ -125,30 +125,33 @@ impl AssociationContext {
     }
 
     /// Read and cache the command object for this message cycle.
-    pub fn read_command_object(&mut self) -> Result<CommandObject, DimseError> {
+    pub async fn read_command_object(&mut self) -> Result<CommandObject, DimseError> {
         if let Some(command_object) = &self.cached_command_object {
             return Ok(command_object.clone());
         }
 
-        let command_object = self.reader.read_command_object(&mut self.association)?;
+        let command_object = self
+            .reader
+            .read_command_object(&mut self.association)
+            .await?;
         self.cached_command_object = Some(command_object.clone());
         Ok(command_object)
     }
 
     /// Read and cache a parsed `DimseCommand`.
-    pub fn read_command(&mut self) -> Result<DimseCommand, DimseError> {
+    pub async fn read_command(&mut self) -> Result<DimseCommand, DimseError> {
         if let Some(command) = &self.cached_command {
             return Ok(command.clone());
         }
 
-        let command = DimseCommand::from_command_object(&self.read_command_object()?)?;
+        let command = DimseCommand::from_command_object(&self.read_command_object().await?)?;
         self.cached_command = Some(command.clone());
         Ok(command)
     }
 
     /// Read one dataset PDV fragment for the active command.
-    pub fn read_data_pdv(&mut self) -> Result<Option<PDataValue>, DimseError> {
-        self.reader.read_data_pdv(&mut self.association)
+    pub async fn read_data_pdv(&mut self) -> Result<Option<PDataValue>, DimseError> {
+        self.reader.read_data_pdv(&mut self.association).await
     }
 
     /// Clear cached command state.
@@ -174,18 +177,19 @@ impl AssociationContext {
     }
 
     /// Serialize and send one DIMSE command set.
-    pub fn send_command_object(
+    pub async fn send_command_object(
         &mut self,
         presentation_context_id: u8,
         command: &InMemDicomObject,
     ) -> Result<(), DimseError> {
         self.writer
             .send_command_object(&mut self.association, presentation_context_id, command)
+            .await
     }
 
     /// Send one dataset PDV fragment.
-    pub fn send_data_pdv(&mut self, pdv: PDataValue) -> Result<(), DimseError> {
-        self.writer.send_data_pdv(&mut self.association, pdv)
+    pub async fn send_data_pdv(&mut self, pdv: PDataValue) -> Result<(), DimseError> {
+        self.writer.send_data_pdv(&mut self.association, pdv).await
     }
 
     pub fn bytes_in(&self) -> u64 {

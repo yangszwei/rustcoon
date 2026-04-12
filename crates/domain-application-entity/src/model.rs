@@ -14,6 +14,7 @@ pub struct LocalApplicationEntity {
     bind_address: SocketAddr,
     read_timeout_seconds: Option<u64>,
     write_timeout_seconds: Option<u64>,
+    max_concurrent_associations: usize,
     max_pdu_length: u32,
 }
 
@@ -24,6 +25,7 @@ impl LocalApplicationEntity {
         bind_address: SocketAddr,
         read_timeout_seconds: Option<u64>,
         write_timeout_seconds: Option<u64>,
+        max_concurrent_associations: usize,
         max_pdu_length: u32,
     ) -> Self {
         Self {
@@ -31,6 +33,7 @@ impl LocalApplicationEntity {
             bind_address,
             read_timeout_seconds,
             write_timeout_seconds,
+            max_concurrent_associations,
             max_pdu_length,
         }
     }
@@ -42,6 +45,7 @@ impl LocalApplicationEntity {
             config.bind_address,
             config.read_timeout_seconds,
             config.write_timeout_seconds,
+            config.max_concurrent_associations,
             config.max_pdu_length,
         ))
     }
@@ -69,6 +73,10 @@ impl LocalApplicationEntity {
     /// Returns max PDU length.
     pub fn max_pdu_length(&self) -> u32 {
         self.max_pdu_length
+    }
+
+    pub fn max_concurrent_associations(&self) -> usize {
+        self.max_concurrent_associations
     }
 }
 
@@ -179,6 +187,7 @@ mod tests {
             read_timeout_seconds: Some(30),
             write_timeout_seconds: Some(30),
             max_pdu_length: 16_384,
+            max_concurrent_associations: 64,
         }
     }
 

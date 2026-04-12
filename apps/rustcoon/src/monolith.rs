@@ -10,7 +10,7 @@ use rustcoon_orchestration::{
     start_listener_for_ae,
 };
 use rustcoon_runtime::{FatalRuntimeError, Runtime, RuntimeApp};
-use tokio::sync::mpsc;
+use tokio::sync::{Semaphore, mpsc};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
@@ -31,7 +31,11 @@ pub async fn run() -> Result<(), OrchestratorError> {
         Some(retrieve),
         DimseServiceSelection::monolith_default(),
     )?;
-    let app = MonolithApp::new(ae_registry, service_registries);
+    let app = MonolithApp::new(
+        ae_registry,
+        service_registries,
+        config.runtime.dimse.clone(),
+    );
     let runtime = Runtime::new(app, config.runtime);
 
     install_ctrl_c_handler(runtime.shutdown_token());
@@ -42,16 +46,19 @@ pub async fn run() -> Result<(), OrchestratorError> {
 struct MonolithApp {
     ae_registry: Arc<ApplicationEntityRegistry>,
     service_registries: std::collections::HashMap<String, Arc<ServiceClassRegistry>>,
+    runtime_dimse: rustcoon_config::runtime::RuntimeDimseConfig,
 }
 
 impl MonolithApp {
     fn new(
         ae_registry: Arc<ApplicationEntityRegistry>,
         service_registries: std::collections::HashMap<String, Arc<ServiceClassRegistry>>,
+        runtime_dimse: rustcoon_config::runtime::RuntimeDimseConfig,
     ) -> Self {
         Self {
             ae_registry,
             service_registries,
+            runtime_dimse,
         }
     }
 
@@ -68,6 +75,9 @@ impl MonolithApp {
         task_tracker: &TaskTracker,
         fatal_tx: mpsc::UnboundedSender<FatalRuntimeError>,
     ) -> Result<(), rustcoon_dimse::DimseError> {
+        let global_association_semaphore = Arc::new(Semaphore::new(
+            self.runtime_dimse.global_max_concurrent_associations,
+        ));
         for local_ae_title in self.local_ae_titles() {
             let service_registry = self
                 .service_registries
@@ -80,6 +90,8 @@ impl MonolithApp {
                 Arc::clone(&self.ae_registry),
                 Arc::clone(service_registry),
                 accepted_abstract_syntaxes,
+                self.runtime_dimse.clone(),
+                Arc::clone(&global_association_semaphore),
                 shutdown.clone(),
                 task_tracker,
                 fatal_tx.clone(),

@@ -12,7 +12,6 @@ use rustcoon_retrieve::{
     RetrieveInstanceCandidate, RetrieveLevel, RetrieveQueryModel, RetrieveRequest, RetrieveService,
 };
 use tokio::io::AsyncReadExt;
-use tokio::runtime::{Builder, Handle};
 
 use crate::context::AssociationContext;
 use crate::error::DimseError;
@@ -162,7 +161,7 @@ fn optional_single_str(
     Ok(Some(value))
 }
 
-pub(crate) fn read_identifier_data_set(
+pub(crate) async fn read_identifier_data_set(
     ctx: &mut AssociationContext,
     presentation_context_id: u8,
     expected_sop_class_uid: &str,
@@ -174,7 +173,7 @@ pub(crate) fn read_identifier_data_set(
         .ok_or_else(|| DimseError::protocol("negotiated transfer syntax is not recognized"))?;
 
     let mut bytes = Vec::new();
-    while let Some(pdv) = ctx.read_data_pdv()? {
+    while let Some(pdv) = ctx.read_data_pdv().await? {
         bytes.extend_from_slice(&pdv.data);
     }
     if bytes.is_empty() {
@@ -214,7 +213,7 @@ pub(crate) enum StoreSubOperationStatus {
     Warning,
 }
 
-pub(crate) fn send_store_sub_operation(
+pub(crate) async fn send_store_sub_operation(
     ctx: &mut AssociationContext,
     retrieve: &RetrieveService,
     candidate: &RetrieveInstanceCandidate,
@@ -222,22 +221,24 @@ pub(crate) fn send_store_sub_operation(
     move_originator: Option<(&str, u16)>,
 ) -> Result<StoreSubOperationStatus, DimseError> {
     let presentation_context_id = store_presentation_context_id(ctx, candidate)?;
-    let payload = match read_retrieve_payload(retrieve, candidate) {
+    let payload = match read_retrieve_payload(retrieve, candidate).await {
         Ok(payload) => payload,
         Err(_) => return Ok(StoreSubOperationStatus::Failed),
     };
     let command = c_store_rq_command(candidate, message_id, move_originator);
 
-    ctx.send_command_object(presentation_context_id, &command)?;
+    ctx.send_command_object(presentation_context_id, &command)
+        .await?;
     ctx.send_data_pdv(PDataValue {
         presentation_context_id,
         value_type: PDataValueType::Data,
         is_last: true,
         data: payload,
-    })?;
+    })
+    .await?;
 
     ctx.clear_cached_command();
-    let response = ctx.read_command()?;
+    let response = ctx.read_command().await?;
     ctx.clear_cached_command();
     c_store_rsp_status(response, message_id)
 }
@@ -267,22 +268,20 @@ fn store_presentation_context_id(
         })
 }
 
-fn read_retrieve_payload(
+async fn read_retrieve_payload(
     retrieve: &RetrieveService,
     candidate: &RetrieveInstanceCandidate,
 ) -> Result<Vec<u8>, DimseError> {
-    block_on_retrieve(async {
-        let mut reader = retrieve
-            .open(candidate)
-            .await
-            .map_err(|err| DimseError::protocol(err.to_string()))?;
-        let mut payload = Vec::new();
-        reader
-            .read_to_end(&mut payload)
-            .await
-            .map_err(|err| DimseError::protocol(err.to_string()))?;
-        Ok(payload)
-    })
+    let mut reader = retrieve
+        .open(candidate)
+        .await
+        .map_err(|err| DimseError::protocol(err.to_string()))?;
+    let mut payload = Vec::new();
+    reader
+        .read_to_end(&mut payload)
+        .await
+        .map_err(|err| DimseError::protocol(err.to_string()))?;
+    Ok(payload)
 }
 
 fn c_store_rq_command(
@@ -355,16 +354,4 @@ fn c_store_rsp_status(
         Some(_) => Ok(StoreSubOperationStatus::Failed),
         None => Err(DimseError::protocol("missing Status in C-STORE-RSP")),
     }
-}
-
-pub(crate) fn block_on_retrieve<T>(future: impl std::future::Future<Output = T>) -> T {
-    if let Ok(handle) = Handle::try_current() {
-        return handle.block_on(future);
-    }
-
-    Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("tokio runtime for retrieve provider")
-        .block_on(future)
 }

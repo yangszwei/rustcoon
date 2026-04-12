@@ -1,7 +1,6 @@
 use std::io::ErrorKind;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::thread;
 use std::time::Duration;
 
 use rustcoon_application_entity::ApplicationEntityRegistry;
@@ -17,6 +16,7 @@ fn local(title: &str, bind: SocketAddr) -> LocalApplicationEntityConfig {
         read_timeout_seconds: Some(1),
         write_timeout_seconds: Some(1),
         max_pdu_length: 16_384,
+        max_concurrent_associations: 64,
     }
 }
 
@@ -31,7 +31,7 @@ fn remote(title: &str, address: SocketAddr) -> RemoteApplicationEntityConfig {
     }
 }
 
-pub fn setup_ul_pair(
+pub async fn setup_ul_pair(
     client_max_pdu_length: u32,
     abstract_syntax_uid: &str,
 ) -> Option<(UlAssociation, UlAssociation)> {
@@ -49,7 +49,7 @@ pub fn setup_ul_pair(
         .expect("valid registry"),
     );
 
-    let listener = match UlListener::bind_from_registry(Arc::clone(&registry), "REMOTE_SCP") {
+    let listener = match UlListener::bind_from_registry(Arc::clone(&registry), "REMOTE_SCP").await {
         Ok(listener) => listener.with_abstract_syntax(abstract_syntax_uid),
         Err(rustcoon_ul::UlError::Io(error)) if error.kind() == ErrorKind::PermissionDenied => {
             return None;
@@ -60,7 +60,7 @@ pub fn setup_ul_pair(
         .local_addr()
         .expect("listener address should resolve");
 
-    let server = thread::spawn(move || listener.accept().expect("server accept").0);
+    let server = tokio::spawn(async move { listener.accept().await.expect("server accept").0 });
 
     let client = OutboundAssociationRequest::new("LOCAL_SCU", "REMOTE_SCP", addr)
         .connect_timeout(Duration::from_secs(1))
@@ -69,8 +69,9 @@ pub fn setup_ul_pair(
         .max_pdu_length(client_max_pdu_length)
         .with_abstract_syntax(abstract_syntax_uid)
         .establish()
+        .await
         .expect("client should establish");
 
-    let server_association = server.join().expect("server join");
+    let server_association = server.await.expect("server join");
     Some((server_association, client))
 }

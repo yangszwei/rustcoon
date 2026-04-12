@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use async_trait::async_trait;
+
 use crate::context::AssociationContext;
 use crate::error::DimseError;
 use crate::service::{CommandField, DescribedServiceClassProvider, ServiceClassProvider};
@@ -100,9 +102,10 @@ impl ServiceClassRegistry {
     }
 }
 
+#[async_trait]
 impl ServiceClassProvider for ServiceClassRegistry {
-    fn handle(&self, ctx: &mut AssociationContext) -> Result<(), DimseError> {
-        let command = ctx.read_command()?;
+    async fn handle(&self, ctx: &mut AssociationContext) -> Result<(), DimseError> {
+        let command = ctx.read_command().await?;
 
         let provider = self
             .provider_for(command.command_field, command.sop_class_uid.as_deref())
@@ -117,7 +120,7 @@ impl ServiceClassProvider for ServiceClassRegistry {
                 )),
             })?;
 
-        provider.handle(ctx)?;
+        provider.handle(ctx).await?;
         ctx.complete_message_cycle()?;
         Ok(())
     }
@@ -128,9 +131,9 @@ mod tests {
     use std::io::ErrorKind;
     use std::net::SocketAddr;
     use std::sync::Arc;
-    use std::thread;
     use std::time::Duration;
 
+    use async_trait::async_trait;
     use dicom_core::{DataElement, PrimitiveValue, VR};
     use dicom_dictionary_std::{tags, uids};
     use dicom_object::InMemDicomObject;
@@ -150,16 +153,18 @@ mod tests {
 
     struct NoopProvider;
 
+    #[async_trait]
     impl ServiceClassProvider for NoopProvider {
-        fn handle(&self, _ctx: &mut AssociationContext) -> Result<(), DimseError> {
+        async fn handle(&self, _ctx: &mut AssociationContext) -> Result<(), DimseError> {
             Ok(())
         }
     }
 
     struct MultiBindingProvider;
 
+    #[async_trait]
     impl ServiceClassProvider for MultiBindingProvider {
-        fn handle(&self, _ctx: &mut AssociationContext) -> Result<(), DimseError> {
+        async fn handle(&self, _ctx: &mut AssociationContext) -> Result<(), DimseError> {
             Ok(())
         }
     }
@@ -181,6 +186,7 @@ mod tests {
             read_timeout_seconds: Some(1),
             write_timeout_seconds: Some(1),
             max_pdu_length: 16_384,
+            max_concurrent_associations: 64,
         }
     }
 
@@ -195,7 +201,7 @@ mod tests {
         }
     }
 
-    fn setup_ul_pair(abstract_syntax: &str) -> Option<(UlAssociation, UlAssociation, u8)> {
+    async fn setup_ul_pair(abstract_syntax: &str) -> Option<(UlAssociation, UlAssociation, u8)> {
         let registry = Arc::new(
             ApplicationEntityRegistry::try_from_config(&ApplicationEntitiesConfig {
                 local: vec![local("REMOTE_SCP", "127.0.0.1:0".parse().ok()?)],
@@ -204,7 +210,9 @@ mod tests {
             .ok()?,
         );
 
-        let listener = match UlListener::bind_from_registry(Arc::clone(&registry), "REMOTE_SCP") {
+        let listener = match UlListener::bind_from_registry(Arc::clone(&registry), "REMOTE_SCP")
+            .await
+        {
             Ok(listener) => listener.with_abstract_syntax(abstract_syntax),
             Err(rustcoon_ul::UlError::Io(error)) if error.kind() == ErrorKind::PermissionDenied => {
                 return None;
@@ -212,7 +220,7 @@ mod tests {
             Err(error) => panic!("listener bind should succeed: {error}"),
         };
         let addr = listener.local_addr().expect("listener address");
-        let server = thread::spawn(move || listener.accept().expect("server accept").0);
+        let server = tokio::spawn(async move { listener.accept().await.expect("server accept").0 });
 
         let client = OutboundAssociationRequest::new("LOCAL_SCU", "REMOTE_SCP", addr)
             .connect_timeout(Duration::from_secs(1))
@@ -220,6 +228,7 @@ mod tests {
             .write_timeout(Duration::from_secs(1))
             .with_abstract_syntax(abstract_syntax)
             .establish()
+            .await
             .expect("client establish");
         let context_id = client
             .presentation_contexts()
@@ -227,7 +236,7 @@ mod tests {
             .find(|pc| pc.abstract_syntax == abstract_syntax)
             .map(|pc| pc.id)
             .expect("accepted context");
-        let server_association = server.join().expect("server join");
+        let server_association = server.await.expect("server join");
 
         Some((server_association, client, context_id))
     }
@@ -320,10 +329,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn handle_dispatches_to_exact_registered_provider() {
+    #[tokio::test]
+    async fn handle_dispatches_to_exact_registered_provider() {
         let Some((server_association, mut client_association, context_id)) =
-            setup_ul_pair(uids::VERIFICATION)
+            setup_ul_pair(uids::VERIFICATION).await
         else {
             return;
         };
@@ -334,6 +343,7 @@ mod tests {
                 context_id,
                 &command_object(0x0030, Some(uids::VERIFICATION)),
             )
+            .await
             .expect("send C-ECHO-RQ");
 
         let mut registry = ServiceClassRegistry::new();
@@ -344,12 +354,13 @@ mod tests {
         );
 
         let mut ctx = AssociationContext::new(server_association);
-        registry.handle(&mut ctx).expect("registry dispatch");
+        registry.handle(&mut ctx).await.expect("registry dispatch");
     }
 
-    #[test]
-    fn handle_dispatches_to_described_provider_binding() {
-        let Some((server_association, mut client_association, context_id)) = setup_ul_pair("1.2.3")
+    #[tokio::test]
+    async fn handle_dispatches_to_described_provider_binding() {
+        let Some((server_association, mut client_association, context_id)) =
+            setup_ul_pair("1.2.3").await
         else {
             return;
         };
@@ -360,19 +371,20 @@ mod tests {
                 context_id,
                 &command_object(0x0020, Some("1.2.3")),
             )
+            .await
             .expect("send C-FIND-RQ");
 
         let mut registry = ServiceClassRegistry::new();
         registry.register_described(Arc::new(MultiBindingProvider));
 
         let mut ctx = AssociationContext::new(server_association);
-        registry.handle(&mut ctx).expect("registry dispatch");
+        registry.handle(&mut ctx).await.expect("registry dispatch");
     }
 
-    #[test]
-    fn handle_returns_error_when_no_provider_matches() {
+    #[tokio::test]
+    async fn handle_returns_error_when_no_provider_matches() {
         let Some((server_association, mut client_association, context_id)) =
-            setup_ul_pair(uids::VERIFICATION)
+            setup_ul_pair(uids::VERIFICATION).await
         else {
             return;
         };
@@ -383,12 +395,14 @@ mod tests {
                 context_id,
                 &command_object(0x0030, Some(uids::VERIFICATION)),
             )
+            .await
             .expect("send C-ECHO-RQ");
 
         let registry = ServiceClassRegistry::new();
         let mut ctx = AssociationContext::new(server_association);
         let error = registry
             .handle(&mut ctx)
+            .await
             .expect_err("no provider should fail");
         assert!(matches!(error, DimseError::Protocol(message) if message.contains("no provider")));
     }

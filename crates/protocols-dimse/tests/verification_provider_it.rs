@@ -37,10 +37,10 @@ fn c_echo_rq_command() -> InMemDicomObject {
     command
 }
 
-#[test]
-fn verification_provider_handle_round_trips_c_echo_response() {
+#[tokio::test]
+async fn verification_provider_handle_round_trips_c_echo_response() {
     let Some((server_association, mut client_association)) =
-        setup_ul_pair(16_384, VERIFICATION_SOP_CLASS)
+        setup_ul_pair(16_384, VERIFICATION_SOP_CLASS).await
     else {
         return;
     };
@@ -49,15 +49,18 @@ fn verification_provider_handle_round_trips_c_echo_response() {
 
     DimseWriter::new()
         .send_command_object(&mut client_association, context_id, &c_echo_rq_command())
+        .await
         .expect("send C-ECHO-RQ");
 
     let mut server_context = AssociationContext::new(server_association);
     VerificationServiceProvider
         .handle(&mut server_context)
+        .await
         .expect("provider should return C-ECHO-RSP");
 
     let response = DimseReader::new()
         .read_command_object(&mut client_association)
+        .await
         .expect("read C-ECHO-RSP");
     assert_eq!(response.presentation_context_id, context_id);
 

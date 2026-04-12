@@ -100,12 +100,16 @@ fn decode_data_set_for_context(
         .expect("decode data set")
 }
 
-fn read_full_data_set(
+async fn read_full_data_set(
     reader: &mut DimseReader,
     association: &mut rustcoon_ul::UlAssociation,
 ) -> Vec<u8> {
     let mut bytes = Vec::new();
-    while let Some(pdv) = reader.read_data_pdv(association).expect("read data pdv") {
+    while let Some(pdv) = reader
+        .read_data_pdv(association)
+        .await
+        .expect("read data pdv")
+    {
         bytes.extend_from_slice(&pdv.data);
     }
     bytes
@@ -154,12 +158,14 @@ impl CatalogReadStore for MockCatalogReadStore {
     }
 }
 
-#[test]
-fn query_provider_returns_pending_identifier_then_final_success() {
+#[tokio::test]
+async fn query_provider_returns_pending_identifier_then_final_success() {
     let Some((server_association, mut client_association)) = setup_ul_pair(
         16_384,
         uids::STUDY_ROOT_QUERY_RETRIEVE_INFORMATION_MODEL_FIND,
-    ) else {
+    )
+    .await
+    else {
         return;
     };
     let context_id = client_association.presentation_contexts()[0].id;
@@ -174,6 +180,7 @@ fn query_provider_returns_pending_identifier_then_final_success() {
     let command = c_find_rq_command(uids::STUDY_ROOT_QUERY_RETRIEVE_INFORMATION_MODEL_FIND);
     DimseWriter::new()
         .send_command_object(&mut client_association, context_id, &command)
+        .await
         .expect("send C-FIND-RQ command");
     let identifier = find_identifier_with_level("STUDY");
     let identifier_bytes =
@@ -188,16 +195,19 @@ fn query_provider_returns_pending_identifier_then_final_success() {
                 data: identifier_bytes,
             },
         )
+        .await
         .expect("send C-FIND-RQ identifier");
 
     let mut server_context = AssociationContext::new(server_association);
     provider
         .handle(&mut server_context)
+        .await
         .expect("provider handles request");
 
     let mut reader = DimseReader::new();
     let pending = reader
         .read_command_object(&mut client_association)
+        .await
         .expect("pending response");
     let pending = DimseCommand::from_command_object(&pending).expect("parse pending");
     assert_eq!(pending.command_field, CommandField::CFindRsp);
@@ -205,7 +215,7 @@ fn query_provider_returns_pending_identifier_then_final_success() {
     assert_eq!(pending.status, Some(0xFF00));
     assert!(pending.has_data_set);
 
-    let pending_identifier_bytes = read_full_data_set(&mut reader, &mut client_association);
+    let pending_identifier_bytes = read_full_data_set(&mut reader, &mut client_association).await;
     let pending_identifier =
         decode_data_set_for_context(&client_association, context_id, pending_identifier_bytes);
     assert_eq!(
@@ -235,6 +245,7 @@ fn query_provider_returns_pending_identifier_then_final_success() {
 
     let final_response = reader
         .read_command_object(&mut client_association)
+        .await
         .expect("final response");
     let final_response = DimseCommand::from_command_object(&final_response).expect("parse final");
     assert_eq!(final_response.command_field, CommandField::CFindRsp);
@@ -242,12 +253,14 @@ fn query_provider_returns_pending_identifier_then_final_success() {
     assert!(!final_response.has_data_set);
 }
 
-#[test]
-fn query_provider_returns_identifier_error_for_invalid_request_identifier() {
+#[tokio::test]
+async fn query_provider_returns_identifier_error_for_invalid_request_identifier() {
     let Some((server_association, mut client_association)) = setup_ul_pair(
         16_384,
         uids::STUDY_ROOT_QUERY_RETRIEVE_INFORMATION_MODEL_FIND,
-    ) else {
+    )
+    .await
+    else {
         return;
     };
     let context_id = client_association.presentation_contexts()[0].id;
@@ -258,6 +271,7 @@ fn query_provider_returns_identifier_error_for_invalid_request_identifier() {
     let command = c_find_rq_command(uids::STUDY_ROOT_QUERY_RETRIEVE_INFORMATION_MODEL_FIND);
     DimseWriter::new()
         .send_command_object(&mut client_association, context_id, &command)
+        .await
         .expect("send C-FIND-RQ command");
     let invalid_identifier = InMemDicomObject::new_empty();
     let invalid_identifier_bytes =
@@ -272,15 +286,18 @@ fn query_provider_returns_identifier_error_for_invalid_request_identifier() {
                 data: invalid_identifier_bytes,
             },
         )
+        .await
         .expect("send invalid C-FIND-RQ identifier");
 
     let mut server_context = AssociationContext::new(server_association);
     provider
         .handle(&mut server_context)
+        .await
         .expect("provider handles invalid identifier");
 
     let response = DimseReader::new()
         .read_command_object(&mut client_association)
+        .await
         .expect("failure response");
     let response = DimseCommand::from_command_object(&response).expect("parse failure");
     assert_eq!(response.command_field, CommandField::CFindRsp);

@@ -1,18 +1,19 @@
 use std::collections::HashMap;
-use std::io::ErrorKind;
 use std::sync::Arc;
 use std::time::Duration;
 
 use rustcoon_application_entity::ApplicationEntityRegistry;
+use rustcoon_config::runtime::RuntimeDimseConfig;
 use rustcoon_dimse::{
-    CGetServiceProvider, CMoveServiceProvider, DimseError, DimseListener, QueryServiceProvider,
-    ServiceClassRegistry, StorageServiceProvider, VerificationServiceProvider,
+    CGetServiceProvider, CMoveServiceProvider, DefaultErrorHandler, DimseError, DimseListener,
+    QueryServiceProvider, ServiceClassRegistry, StorageServiceProvider,
+    VerificationServiceProvider,
 };
 use rustcoon_ingest::IngestService;
 use rustcoon_query::QueryService;
 use rustcoon_retrieve::RetrieveService;
 use rustcoon_runtime::FatalRuntimeError;
-use tokio::sync::mpsc;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use tracing::{error, info, warn};
@@ -105,75 +106,213 @@ pub fn build_dimse_service_registries(
 }
 
 /// Starts a DIMSE listener task for a local AE and service registry.
+#[allow(clippy::too_many_arguments)]
 pub fn start_listener_for_ae(
     local_ae_title: String,
     ae_registry: Arc<ApplicationEntityRegistry>,
     service_registry: Arc<ServiceClassRegistry>,
     accepted_abstract_syntaxes: Vec<String>,
+    dimse_config: RuntimeDimseConfig,
+    global_association_semaphore: Arc<Semaphore>,
     shutdown: CancellationToken,
     task_tracker: &TaskTracker,
     fatal_tx: mpsc::UnboundedSender<FatalRuntimeError>,
 ) -> Result<(), DimseError> {
-    let listener = DimseListener::bind_from_registry(Arc::clone(&ae_registry), &local_ae_title)?
-        .with_abstract_syntaxes(accepted_abstract_syntaxes.iter().map(String::as_str))
-        .with_nonblocking_accept()?;
-    let listener_addr = listener.local_addr()?;
-    info!(
-        local_ae_title,
-        bind_address = %listener_addr,
-        "DIMSE listener started",
-    );
-    task_tracker.spawn(async move {
+    let per_ae_limit = ae_registry
+        .local(&local_ae_title.parse()?)
+        .ok_or_else(|| rustcoon_ul::UlError::LocalAeNotFound(local_ae_title.clone()))?
+        .max_concurrent_associations();
+    let per_ae_association_semaphore = Arc::new(Semaphore::new(per_ae_limit));
+    let task_tracker = task_tracker.clone();
+    task_tracker.clone().spawn(async move {
         let _keep_runtime_open = fatal_tx;
-        listener_loop(listener, service_registry, shutdown, local_ae_title).await;
+        let listener = match DimseListener::bind_from_registry(
+            Arc::clone(&ae_registry),
+            &local_ae_title,
+        )
+        .await
+        {
+            Ok(listener) => listener
+                .with_abstract_syntaxes(accepted_abstract_syntaxes.iter().map(String::as_str)),
+            Err(error) => {
+                let _ = _keep_runtime_open.send(FatalRuntimeError::new(
+                    "dimse.listener",
+                    "bind_failed",
+                    error,
+                ));
+                return;
+            }
+        };
+        let listener_addr = match listener.local_addr() {
+            Ok(addr) => addr,
+            Err(error) => {
+                let _ = _keep_runtime_open.send(FatalRuntimeError::new(
+                    "dimse.listener",
+                    "resolve_local_addr_failed",
+                    error,
+                ));
+                return;
+            }
+        };
+        info!(
+            local_ae_title,
+            bind_address = %listener_addr,
+            max_concurrent_associations = per_ae_limit,
+            "DIMSE listener started",
+        );
+        listener_loop(
+            Arc::new(listener),
+            service_registry,
+            shutdown,
+            local_ae_title,
+            dimse_config,
+            global_association_semaphore,
+            per_ae_association_semaphore,
+            task_tracker,
+        )
+        .await;
     });
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn listener_loop(
-    listener: DimseListener,
+    listener: Arc<DimseListener>,
     provider: Arc<ServiceClassRegistry>,
     shutdown: CancellationToken,
     local_ae_title: String,
+    dimse_config: RuntimeDimseConfig,
+    global_association_semaphore: Arc<Semaphore>,
+    per_ae_association_semaphore: Arc<Semaphore>,
+    task_tracker: TaskTracker,
 ) {
-    let listener = Arc::new(listener);
     loop {
-        let listener_for_serve = Arc::clone(&listener);
-        let provider_for_serve = Arc::clone(&provider);
-        let mut serve_task = tokio::task::spawn_blocking(move || {
-            listener_for_serve.accept_and_handle(provider_for_serve.as_ref())
-        });
-
-        tokio::select! {
+        let (socket, peer_addr) = tokio::select! {
             _ = shutdown.cancelled() => {
-                let _ = (&mut serve_task).await;
                 break;
             }
-            join_result = &mut serve_task => {
-                let result = join_result.unwrap_or_else(|join_error| Err(DimseError::Protocol(format!(
-                        "listener worker join failure: {join_error}"
-                    ))));
-                match result {
-                    Err(DimseError::Ul(rustcoon_ul::UlError::Io(error)))
-                        if error.kind() == ErrorKind::WouldBlock =>
-                    {
-                        tokio::time::sleep(Duration::from_millis(50)).await;
-                    }
-                    Ok(()) => {}
-                    Err(DimseError::Ul(rustcoon_ul::UlError::Rejected)) => {
-                        warn!(local_ae_title, "association rejected by UL policy");
-                    }
+            accept_result = listener.accept_socket() => {
+                match accept_result {
+                    Ok(accepted) => accepted,
                     Err(error) => {
                         error!(
                             local_ae_title,
                             error = %error,
-                            "listener loop error",
+                            "listener accept failed",
                         );
+                        continue;
                     }
                 }
             }
-        }
+        };
+
+        let permits = match acquire_association_permits(
+            &shutdown,
+            &global_association_semaphore,
+            &per_ae_association_semaphore,
+            Duration::from_secs(dimse_config.permit_wait_timeout_seconds),
+        )
+        .await
+        {
+            Ok(permits) => permits,
+            Err(PermitAcquireError::Shutdown) => break,
+            Err(PermitAcquireError::Timeout) => {
+                warn!(
+                    local_ae_title,
+                    peer_addr = %peer_addr,
+                    "DIMSE association rejected because concurrency permits were unavailable",
+                );
+                drop(socket);
+                continue;
+            }
+            Err(PermitAcquireError::Closed) => break,
+        };
+
+        let listener = Arc::clone(&listener);
+        let provider = Arc::clone(&provider);
+        let local_ae_title = local_ae_title.clone();
+        task_tracker.spawn(async move {
+            let _permits = permits;
+            match listener.establish(socket, peer_addr).await {
+                Ok((ctx, peer_addr)) => {
+                    if let Err(error) = listener
+                        .handle_established_with_handler(
+                            ctx,
+                            peer_addr,
+                            provider.as_ref(),
+                            &DefaultErrorHandler,
+                        )
+                        .await
+                    {
+                        match error {
+                            DimseError::Ul(rustcoon_ul::UlError::Rejected) => {
+                                warn!(local_ae_title, peer_addr = %peer_addr, "association rejected by UL policy");
+                            }
+                            other => {
+                                error!(
+                                    local_ae_title,
+                                    peer_addr = %peer_addr,
+                                    error = %other,
+                                    "association handler failed",
+                                );
+                            }
+                        }
+                    }
+                }
+                Err(DimseError::Ul(rustcoon_ul::UlError::Rejected)) => {
+                    warn!(local_ae_title, peer_addr = %peer_addr, "association rejected by UL policy");
+                }
+                Err(error) => {
+                    error!(
+                        local_ae_title,
+                        peer_addr = %peer_addr,
+                        error = %error,
+                        "association establishment failed",
+                    );
+                }
+            }
+        });
     }
+}
+
+#[derive(Debug)]
+enum PermitAcquireError {
+    Shutdown,
+    Timeout,
+    Closed,
+}
+
+async fn acquire_association_permits(
+    shutdown: &CancellationToken,
+    global_association_semaphore: &Arc<Semaphore>,
+    per_ae_association_semaphore: &Arc<Semaphore>,
+    wait_timeout: Duration,
+) -> Result<(OwnedSemaphorePermit, OwnedSemaphorePermit), PermitAcquireError> {
+    let global_permit = tokio::select! {
+        _ = shutdown.cancelled() => return Err(PermitAcquireError::Shutdown),
+        result = tokio::time::timeout(
+            wait_timeout,
+            Arc::clone(global_association_semaphore).acquire_owned(),
+        ) => match result {
+            Ok(Ok(permit)) => permit,
+            Ok(Err(_)) => return Err(PermitAcquireError::Closed),
+            Err(_) => return Err(PermitAcquireError::Timeout),
+        }
+    };
+
+    let per_ae_permit = tokio::select! {
+        _ = shutdown.cancelled() => return Err(PermitAcquireError::Shutdown),
+        result = tokio::time::timeout(
+            wait_timeout,
+            Arc::clone(per_ae_association_semaphore).acquire_owned(),
+        ) => match result {
+            Ok(Ok(permit)) => permit,
+            Ok(Err(_)) => return Err(PermitAcquireError::Closed),
+            Err(_) => return Err(PermitAcquireError::Timeout),
+        }
+    };
+
+    Ok((global_permit, per_ae_permit))
 }
 
 #[cfg(test)]
@@ -197,6 +336,7 @@ mod tests {
             read_timeout_seconds: Some(1),
             write_timeout_seconds: Some(1),
             max_pdu_length: 16_384,
+            max_concurrent_associations: 64,
         }
     }
 
@@ -238,12 +378,18 @@ mod tests {
         shutdown.cancel();
         let task_tracker = tokio_util::task::TaskTracker::new();
         let (fatal_tx, _fatal_rx) = tokio::sync::mpsc::unbounded_channel();
+        let dimse_config = rustcoon_config::runtime::RuntimeDimseConfig::default();
+        let global_semaphore = Arc::new(tokio::sync::Semaphore::new(
+            dimse_config.global_max_concurrent_associations,
+        ));
 
         let result = start_listener_for_ae(
             "LOCAL_AE".to_string(),
             ae_registry,
             service_registry,
             accepted,
+            dimse_config,
+            global_semaphore,
             shutdown,
             &task_tracker,
             fatal_tx,
@@ -276,12 +422,18 @@ mod tests {
         let shutdown = tokio_util::sync::CancellationToken::new();
         let task_tracker = tokio_util::task::TaskTracker::new();
         let (fatal_tx, _fatal_rx) = tokio::sync::mpsc::unbounded_channel();
+        let dimse_config = rustcoon_config::runtime::RuntimeDimseConfig::default();
+        let global_semaphore = Arc::new(tokio::sync::Semaphore::new(
+            dimse_config.global_max_concurrent_associations,
+        ));
 
         let result = start_listener_for_ae(
             "MISSING_LOCAL".to_string(),
             ae_registry,
             service_registry,
             accepted,
+            dimse_config,
+            global_semaphore,
             shutdown,
             &task_tracker,
             fatal_tx,

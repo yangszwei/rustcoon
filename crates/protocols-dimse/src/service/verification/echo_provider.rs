@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use dicom_dictionary_std::uids;
 
 use crate::context::AssociationContext;
@@ -15,12 +16,14 @@ impl VerificationServiceProvider {
     pub const SOP_CLASS_UID: &'static str = uids::VERIFICATION;
 }
 
+#[async_trait]
 impl ServiceClassProvider for VerificationServiceProvider {
-    fn handle(&self, ctx: &mut AssociationContext) -> Result<(), DimseError> {
-        let request = CEchoRequest::from_command(&ctx.read_command()?)?;
+    async fn handle(&self, ctx: &mut AssociationContext) -> Result<(), DimseError> {
+        let request = CEchoRequest::from_command(&ctx.read_command().await?)?;
         tracing::debug!(stage = "validate", "C-ECHO request validated");
         let response = CEchoResponse::success_for(&request).to_command_object();
-        ctx.send_command_object(request.presentation_context_id, &response)?;
+        ctx.send_command_object(request.presentation_context_id, &response)
+            .await?;
         ctx.record_response_status(0x0000);
         tracing::debug!(
             stage = "response",

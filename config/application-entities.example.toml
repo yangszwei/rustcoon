@@ -6,6 +6,7 @@ title = "RUSTCOON"
 bind_address = "127.0.0.1:11112"
 read_timeout_seconds = 30 # omit to disable timeout
 write_timeout_seconds = 30 # omit to disable timeout
+max_concurrent_associations = 64
 max_pdu_length = 65536
 
 [[application_entities.remote]] # or [[aes.remote]]

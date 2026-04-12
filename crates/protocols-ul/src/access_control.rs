@@ -74,6 +74,7 @@ mod tests {
             read_timeout_seconds: Some(30),
             write_timeout_seconds: Some(30),
             max_pdu_length: 16_384,
+            max_concurrent_associations: 64,
         }
     }
 

@@ -1,10 +1,10 @@
-use std::net::TcpStream;
 use std::time::Instant;
 
-use dicom_ul::association::client::ClientAssociation;
-use dicom_ul::association::server::ServerAssociation;
-use dicom_ul::association::{Association, SyncAssociation};
+use dicom_ul::association::client::AsyncClientAssociation;
+use dicom_ul::association::server::AsyncServerAssociation;
+use dicom_ul::association::{Association, AsyncAssociation};
 use dicom_ul::pdu::{Pdu, PresentationContextNegotiated};
+use tokio::net::TcpStream;
 use tracing::{Level, info, trace, warn};
 
 use crate::error::UlError;
@@ -19,8 +19,8 @@ pub enum AssociationRole {
 
 #[derive(Debug)]
 enum UlAssociationInner {
-    Requestor(ClientAssociation<TcpStream>),
-    Acceptor(ServerAssociation<TcpStream>),
+    Requestor(AsyncClientAssociation<TcpStream>),
+    Acceptor(AsyncServerAssociation<TcpStream>),
 }
 
 /// Wrapper over established requestor/acceptor UL association types.
@@ -40,7 +40,7 @@ fn classify_acceptor_release_response(pdu: Pdu) -> Result<bool, UlError> {
 }
 
 impl UlAssociation {
-    pub(crate) fn from_requestor(association: ClientAssociation<TcpStream>) -> Self {
+    pub(crate) fn from_requestor(association: AsyncClientAssociation<TcpStream>) -> Self {
         record_association_established(AssociationRole::Requestor);
         Self {
             role: AssociationRole::Requestor,
@@ -49,7 +49,7 @@ impl UlAssociation {
         }
     }
 
-    pub(crate) fn from_acceptor(association: ServerAssociation<TcpStream>) -> Self {
+    pub(crate) fn from_acceptor(association: AsyncServerAssociation<TcpStream>) -> Self {
         record_association_established(AssociationRole::Acceptor);
         let peer_ae_title = Some(Association::peer_ae_title(&association).to_string());
         Self {
@@ -70,7 +70,7 @@ impl UlAssociation {
     }
 
     /// Send one PDU to the peer.
-    pub fn send_pdu(&mut self, pdu: &Pdu) -> Result<(), UlError> {
+    pub async fn send_pdu(&mut self, pdu: &Pdu) -> Result<(), UlError> {
         let role = self.role();
         let trace_enabled = tracing::enabled!(Level::TRACE);
         let pdu_kind_label = if trace_enabled { pdu_kind(pdu) } else { "" };
@@ -85,12 +85,12 @@ impl UlAssociation {
             .as_mut()
             .expect("association must be present while value is alive");
         let result = match association {
-            UlAssociationInner::Requestor(association) => {
-                SyncAssociation::send(association, pdu).map_err(UlError::from)
-            }
-            UlAssociationInner::Acceptor(association) => {
-                SyncAssociation::send(association, pdu).map_err(UlError::from)
-            }
+            UlAssociationInner::Requestor(association) => AsyncAssociation::send(association, pdu)
+                .await
+                .map_err(UlError::from),
+            UlAssociationInner::Acceptor(association) => AsyncAssociation::send(association, pdu)
+                .await
+                .map_err(UlError::from),
         };
 
         match &result {
@@ -119,7 +119,7 @@ impl UlAssociation {
     }
 
     /// Receive one PDU from the peer.
-    pub fn receive_pdu(&mut self) -> Result<Pdu, UlError> {
+    pub async fn receive_pdu(&mut self) -> Result<Pdu, UlError> {
         let role = self.role();
         let trace_enabled = tracing::enabled!(Level::TRACE);
         let started_at = if trace_enabled {
@@ -133,12 +133,12 @@ impl UlAssociation {
             .as_mut()
             .expect("association must be present while value is alive");
         let result = match association {
-            UlAssociationInner::Requestor(association) => {
-                SyncAssociation::receive(association).map_err(UlError::from)
-            }
-            UlAssociationInner::Acceptor(association) => {
-                SyncAssociation::receive(association).map_err(UlError::from)
-            }
+            UlAssociationInner::Requestor(association) => AsyncAssociation::receive(association)
+                .await
+                .map_err(UlError::from),
+            UlAssociationInner::Acceptor(association) => AsyncAssociation::receive(association)
+                .await
+                .map_err(UlError::from),
         };
 
         match &result {
@@ -214,7 +214,7 @@ impl UlAssociation {
     }
 
     /// Gracefully release the association.
-    pub fn release(mut self) -> Result<(), UlError> {
+    pub async fn release(mut self) -> Result<(), UlError> {
         let role = self.role();
         let started_at = Instant::now();
 
@@ -223,16 +223,22 @@ impl UlAssociation {
             .take()
             .expect("association must be present while value is alive");
         let result = match association {
-            UlAssociationInner::Requestor(association) => {
-                SyncAssociation::release(association).map_err(UlError::from)
-            }
+            UlAssociationInner::Requestor(association) => AsyncAssociation::release(association)
+                .await
+                .map_err(UlError::from),
             UlAssociationInner::Acceptor(mut association) => {
-                SyncAssociation::send(&mut association, &Pdu::ReleaseRQ).map_err(UlError::from)?;
+                AsyncAssociation::send(&mut association, &Pdu::ReleaseRQ)
+                    .await
+                    .map_err(UlError::from)?;
                 let should_reply_release_rp = classify_acceptor_release_response(
-                    SyncAssociation::receive(&mut association).map_err(UlError::from)?,
+                    AsyncAssociation::receive(&mut association)
+                        .await
+                        .map_err(UlError::from)?,
                 )?;
                 if should_reply_release_rp {
-                    SyncAssociation::send(&mut association, &Pdu::ReleaseRP).map_err(UlError::from)
+                    AsyncAssociation::send(&mut association, &Pdu::ReleaseRP)
+                        .await
+                        .map_err(UlError::from)
                 } else {
                     Ok(())
                 }
@@ -262,7 +268,7 @@ impl UlAssociation {
     }
 
     /// Abort the association.
-    pub fn abort(mut self) -> Result<(), UlError> {
+    pub async fn abort(mut self) -> Result<(), UlError> {
         let role = self.role();
         let started_at = Instant::now();
 
@@ -271,12 +277,12 @@ impl UlAssociation {
             .take()
             .expect("association must be present while value is alive");
         let result = match association {
-            UlAssociationInner::Requestor(association) => {
-                SyncAssociation::abort(association).map_err(UlError::from)
-            }
-            UlAssociationInner::Acceptor(association) => {
-                SyncAssociation::abort(association).map_err(UlError::from)
-            }
+            UlAssociationInner::Requestor(association) => AsyncAssociation::abort(association)
+                .await
+                .map_err(UlError::from),
+            UlAssociationInner::Acceptor(association) => AsyncAssociation::abort(association)
+                .await
+                .map_err(UlError::from),
         };
 
         match &result {

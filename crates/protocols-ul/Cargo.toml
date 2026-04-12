@@ -4,14 +4,15 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-dicom-ul = "0.9.1"
+dicom-ul = { version = "0.9.1", features = ["async"] }
 opentelemetry.workspace = true
 thiserror = "2.0.18"
+tokio = { version = "1.50.0", features = ["io-util", "net", "time"] }
 tracing.workspace = true
 
 rustcoon-application-entity = { path = "../domain-application-entity" }
 
 [dev-dependencies]
-tokio = { version = "1.50.0", features = ["macros", "rt-multi-thread", "time"] }
+tokio = { version = "1.50.0", features = ["macros", "rt-multi-thread"] }
 
 rustcoon-config = { path = "../platform-config" }

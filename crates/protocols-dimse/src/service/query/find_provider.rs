@@ -1,6 +1,7 @@
 use std::io::Cursor;
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use dicom_core::Tag;
 use dicom_dictionary_std::{tags, uids};
 use dicom_encoding::transfer_syntax::TransferSyntaxIndex;
@@ -11,7 +12,6 @@ use rustcoon_query::{
     CFindQueryModel as AppCFindQueryModel, CFindRequest as AppCFindRequest,
     CFindResponseLocation as AppCFindResponseLocation, QueryError, QueryService,
 };
-use tokio::runtime::{Builder, Handle};
 
 use crate::context::AssociationContext;
 use crate::error::DimseError;
@@ -88,26 +88,27 @@ impl QueryServiceProvider {
     }
 }
 
+#[async_trait]
 impl ServiceClassProvider for QueryServiceProvider {
-    fn handle(&self, ctx: &mut AssociationContext) -> Result<(), DimseError> {
-        let request = CFindRequest::from_command(&ctx.read_command()?)?;
+    async fn handle(&self, ctx: &mut AssociationContext) -> Result<(), DimseError> {
+        let request = CFindRequest::from_command(&ctx.read_command().await?)?;
         tracing::debug!(stage = "validate", "C-FIND request validated");
         let query_model = match Self::find_model_for_sop_class_uid(&request.affected_sop_class_uid)
         {
             Ok(model) => model,
             Err(failure) => {
-                send_failure_response(ctx, &request, failure)?;
+                send_failure_response(ctx, &request, failure).await?;
                 return Ok(());
             }
         };
 
-        let identifier = match read_identifier_data_set(ctx, &request) {
+        let identifier = match read_identifier_data_set(ctx, &request).await {
             Ok(identifier) => {
                 tracing::debug!(stage = "identifier_decoded", "C-FIND identifier decoded");
                 identifier
             }
             Err(failure) => {
-                send_failure_response(ctx, &request, failure)?;
+                send_failure_response(ctx, &request, failure).await?;
                 return Ok(());
             }
         };
@@ -126,7 +127,7 @@ impl ServiceClassProvider for QueryServiceProvider {
             backend = "query",
             "C-FIND query started"
         );
-        let result = block_on_query(self.query.find(app_request));
+        let result = self.query.find(app_request).await;
         let result = match result {
             Ok(result) => result,
             Err(error) => {
@@ -136,7 +137,7 @@ impl ServiceClassProvider for QueryServiceProvider {
                     error = %error,
                     "C-FIND query failed"
                 );
-                send_failure_response(ctx, &request, map_query_error(error))?;
+                send_failure_response(ctx, &request, map_query_error(error)).await?;
                 return Ok(());
             }
         };
@@ -149,17 +150,20 @@ impl ServiceClassProvider for QueryServiceProvider {
 
         for matched in result.matches.items {
             let response = CFindResponse::pending_for(&request).to_command_object();
-            ctx.send_command_object(request.presentation_context_id, &response)?;
+            ctx.send_command_object(request.presentation_context_id, &response)
+                .await?;
             send_identifier_data_set(
                 ctx,
                 request.presentation_context_id,
                 &request.affected_sop_class_uid,
                 &matched.identifier,
-            )?;
+            )
+            .await?;
         }
 
         let response = CFindResponse::success_for(&request).to_command_object();
-        ctx.send_command_object(request.presentation_context_id, &response)?;
+        ctx.send_command_object(request.presentation_context_id, &response)
+            .await?;
         ctx.record_response_status(CFindStatus::Success.code());
         tracing::debug!(
             stage = "response",
@@ -186,7 +190,7 @@ impl DescribedServiceClassProvider for QueryServiceProvider {
     }
 }
 
-fn send_failure_response(
+async fn send_failure_response(
     ctx: &mut AssociationContext,
     request: &CFindRequest,
     failure: CFindFailure,
@@ -202,7 +206,8 @@ fn send_failure_response(
     ctx.send_command_object(
         request.presentation_context_id,
         &response.to_command_object(),
-    )?;
+    )
+    .await?;
     let status = failure.status.code();
     ctx.record_response_status(status);
     tracing::debug!(
@@ -265,7 +270,7 @@ fn c_find_status_error_class(status: CFindStatus) -> DimseErrorClass {
     }
 }
 
-fn read_identifier_data_set(
+async fn read_identifier_data_set(
     ctx: &mut AssociationContext,
     request: &CFindRequest,
 ) -> Result<InMemDicomObject, CFindFailure> {
@@ -286,7 +291,7 @@ fn read_identifier_data_set(
     }
 
     let mut bytes = Vec::new();
-    while let Some(pdv) = ctx.read_data_pdv().map_err(|_| {
+    while let Some(pdv) = ctx.read_data_pdv().await.map_err(|_| {
         CFindFailure::new(CFindStatus::UnableToProcess)
             .with_error_comment("failed while reading C-FIND identifier")
     })? {
@@ -305,7 +310,7 @@ fn read_identifier_data_set(
     })
 }
 
-fn send_identifier_data_set(
+async fn send_identifier_data_set(
     ctx: &mut AssociationContext,
     presentation_context_id: u8,
     affected_sop_class_uid: &str,
@@ -331,6 +336,7 @@ fn send_identifier_data_set(
         is_last: true,
         data: bytes,
     })
+    .await
 }
 
 fn negotiated_transfer_syntax_uid(
@@ -356,18 +362,6 @@ fn negotiated_transfer_syntax_uid(
     }
 
     Ok(presentation_context.transfer_syntax.clone())
-}
-
-fn block_on_query<T>(future: impl std::future::Future<Output = T>) -> T {
-    if let Ok(handle) = Handle::try_current() {
-        return handle.block_on(future);
-    }
-
-    Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("tokio runtime for C-FIND provider")
-        .block_on(future)
 }
 
 #[cfg(test)]

@@ -20,7 +20,7 @@ impl DimseWriter {
         Self::default()
     }
 
-    pub fn send_command_object(
+    pub async fn send_command_object(
         &mut self,
         association: &mut UlAssociation,
         presentation_context_id: u8,
@@ -41,9 +41,10 @@ impl DimseWriter {
                 data: bytes,
             },
         )
+        .await
     }
 
-    pub fn send_data_pdv(
+    pub async fn send_data_pdv(
         &mut self,
         association: &mut UlAssociation,
         pdv: PDataValue,
@@ -51,10 +52,10 @@ impl DimseWriter {
         if pdv.value_type != PDataValueType::Data {
             return Err(DimseError::protocol("send_data_pdv expects a data PDV"));
         }
-        self.send_pdv(association, pdv)
+        self.send_pdv(association, pdv).await
     }
 
-    fn send_pdv(
+    async fn send_pdv(
         &mut self,
         association: &mut UlAssociation,
         pdv: PDataValue,
@@ -71,7 +72,9 @@ impl DimseWriter {
                 ));
             }
 
-            association.send_pdu(&Pdu::PData { data: vec![pdv] })?;
+            association
+                .send_pdu(&Pdu::PData { data: vec![pdv] })
+                .await?;
             self.bytes_out = self
                 .bytes_out
                 .saturating_add((PDATA_PDU_HEADER_BYTES + PDV_ITEM_OVERHEAD_BYTES) as u64);
@@ -85,14 +88,16 @@ impl DimseWriter {
             let is_fragment_last = end == total_len && pdv.is_last;
             let fragment_data = pdv.data[offset..end].to_vec();
 
-            association.send_pdu(&Pdu::PData {
-                data: vec![PDataValue {
-                    presentation_context_id: pdv.presentation_context_id,
-                    value_type: pdv.value_type.clone(),
-                    is_last: is_fragment_last,
-                    data: fragment_data,
-                }],
-            })?;
+            association
+                .send_pdu(&Pdu::PData {
+                    data: vec![PDataValue {
+                        presentation_context_id: pdv.presentation_context_id,
+                        value_type: pdv.value_type.clone(),
+                        is_last: is_fragment_last,
+                        data: fragment_data,
+                    }],
+                })
+                .await?;
             self.bytes_out = self
                 .bytes_out
                 .saturating_add((PDATA_PDU_HEADER_BYTES + PDV_ITEM_OVERHEAD_BYTES) as u64)
@@ -179,7 +184,6 @@ mod tests {
     use std::io::ErrorKind;
     use std::net::SocketAddr;
     use std::sync::Arc;
-    use std::thread;
     use std::time::Duration;
 
     use dicom_core::{DataElement, PrimitiveValue, VR};
@@ -205,6 +209,7 @@ mod tests {
             read_timeout_seconds: Some(1),
             write_timeout_seconds: Some(1),
             max_pdu_length,
+            max_concurrent_associations: 64,
         }
     }
 
@@ -219,7 +224,7 @@ mod tests {
         }
     }
 
-    fn setup_ul_pair(
+    async fn setup_ul_pair(
         server_max_pdu: u32,
     ) -> Option<(UlAssociation, UlAssociation, u8, Option<u8>)> {
         let registry = Arc::new(
@@ -234,7 +239,9 @@ mod tests {
             .ok()?,
         );
 
-        let listener = match UlListener::bind_from_registry(Arc::clone(&registry), "REMOTE_SCP") {
+        let listener = match UlListener::bind_from_registry(Arc::clone(&registry), "REMOTE_SCP")
+            .await
+        {
             Ok(listener) => listener.with_abstract_syntax(VERIFICATION_SOP_CLASS),
             Err(rustcoon_ul::UlError::Io(error)) if error.kind() == ErrorKind::PermissionDenied => {
                 return None;
@@ -242,7 +249,7 @@ mod tests {
             Err(error) => panic!("listener bind should succeed: {error}"),
         };
         let addr = listener.local_addr().expect("listener address");
-        let server = thread::spawn(move || listener.accept().expect("server accept").0);
+        let server = tokio::spawn(async move { listener.accept().await.expect("server accept").0 });
 
         let client = OutboundAssociationRequest::new("LOCAL_SCU", "REMOTE_SCP", addr)
             .connect_timeout(Duration::from_secs(1))
@@ -251,6 +258,7 @@ mod tests {
             .with_abstract_syntax(VERIFICATION_SOP_CLASS)
             .with_abstract_syntax(UNKNOWN_SOP_CLASS)
             .establish()
+            .await
             .expect("client establish");
 
         let accepted_context_id = client
@@ -264,7 +272,7 @@ mod tests {
             .iter()
             .find(|pc| pc.abstract_syntax == UNKNOWN_SOP_CLASS)
             .map(|pc| pc.id);
-        let server_association = server.join().expect("server join");
+        let server_association = server.await.expect("server join");
 
         Some((
             server_association,
@@ -289,32 +297,39 @@ mod tests {
         command
     }
 
-    #[test]
-    fn writer_rejects_unnegotiated_and_non_accepted_contexts() {
-        let Some((_server, mut client, accepted_id, rejected_id)) = setup_ul_pair(16_384) else {
+    #[tokio::test]
+    async fn writer_rejects_unnegotiated_and_non_accepted_contexts() {
+        let Some((_server, mut client, accepted_id, rejected_id)) = setup_ul_pair(16_384).await
+        else {
             return;
         };
         let mut writer = DimseWriter::new();
         let command = valid_command(false);
 
-        let missing = writer.send_command_object(&mut client, accepted_id + 100, &command);
+        let missing = writer
+            .send_command_object(&mut client, accepted_id + 100, &command)
+            .await;
         assert!(matches!(missing, Err(DimseError::Protocol(_))));
 
         if let Some(rejected_id) = rejected_id {
-            let rejected = writer.send_command_object(&mut client, rejected_id, &command);
+            let rejected = writer
+                .send_command_object(&mut client, rejected_id, &command)
+                .await;
             assert!(matches!(rejected, Err(DimseError::Protocol(_))));
         }
     }
 
-    #[test]
-    fn writer_rejects_invalid_command_objects() {
-        let Some((_server, mut client, context_id, _)) = setup_ul_pair(16_384) else {
+    #[tokio::test]
+    async fn writer_rejects_invalid_command_objects() {
+        let Some((_server, mut client, context_id, _)) = setup_ul_pair(16_384).await else {
             return;
         };
         let mut writer = DimseWriter::new();
 
         let missing = InMemDicomObject::new_empty();
-        let result = writer.send_command_object(&mut client, context_id, &missing);
+        let result = writer
+            .send_command_object(&mut client, context_id, &missing)
+            .await;
         assert!(matches!(result, Err(DimseError::Protocol(_))));
 
         let mut non_command = valid_command(false);
@@ -323,43 +338,49 @@ mod tests {
             VR::PN,
             "DOE^JOHN",
         ));
-        let result = writer.send_command_object(&mut client, context_id, &non_command);
+        let result = writer
+            .send_command_object(&mut client, context_id, &non_command)
+            .await;
         assert!(matches!(result, Err(DimseError::Protocol(_))));
     }
 
-    #[test]
-    fn writer_rejects_invalid_data_pdv_inputs() {
-        let Some((_server, mut client, context_id, _)) = setup_ul_pair(16_384) else {
+    #[tokio::test]
+    async fn writer_rejects_invalid_data_pdv_inputs() {
+        let Some((_server, mut client, context_id, _)) = setup_ul_pair(16_384).await else {
             return;
         };
         let mut writer = DimseWriter::new();
 
-        let wrong_type = writer.send_data_pdv(
-            &mut client,
-            PDataValue {
-                presentation_context_id: context_id,
-                value_type: PDataValueType::Command,
-                is_last: true,
-                data: vec![1],
-            },
-        );
+        let wrong_type = writer
+            .send_data_pdv(
+                &mut client,
+                PDataValue {
+                    presentation_context_id: context_id,
+                    value_type: PDataValueType::Command,
+                    is_last: true,
+                    data: vec![1],
+                },
+            )
+            .await;
         assert!(matches!(wrong_type, Err(DimseError::Protocol(_))));
 
-        let empty_non_last = writer.send_data_pdv(
-            &mut client,
-            PDataValue {
-                presentation_context_id: context_id,
-                value_type: PDataValueType::Data,
-                is_last: false,
-                data: vec![],
-            },
-        );
+        let empty_non_last = writer
+            .send_data_pdv(
+                &mut client,
+                PDataValue {
+                    presentation_context_id: context_id,
+                    value_type: PDataValueType::Data,
+                    is_last: false,
+                    data: vec![],
+                },
+            )
+            .await;
         assert!(matches!(empty_non_last, Err(DimseError::Protocol(_))));
     }
 
-    #[test]
-    fn writer_splits_data_by_peer_max_pdu_and_reader_reassembles() {
-        let Some((mut server, mut client, context_id, _)) = setup_ul_pair(4096) else {
+    #[tokio::test]
+    async fn writer_splits_data_by_peer_max_pdu_and_reader_reassembles() {
+        let Some((mut server, mut client, context_id, _)) = setup_ul_pair(4096).await else {
             return;
         };
         let mut writer = DimseWriter::new();
@@ -367,6 +388,7 @@ mod tests {
 
         writer
             .send_command_object(&mut client, context_id, &valid_command(true))
+            .await
             .expect("send command");
         writer
             .send_data_pdv(
@@ -378,20 +400,26 @@ mod tests {
                     data: vec![7; 10_000],
                 },
             )
+            .await
             .expect("send fragmented dataset");
 
         let _ = reader
             .read_command_object(&mut server)
+            .await
             .expect("read command");
         let mut total = 0usize;
-        while let Some(pdv) = reader.read_data_pdv(&mut server).expect("read dataset") {
+        while let Some(pdv) = reader
+            .read_data_pdv(&mut server)
+            .await
+            .expect("read dataset")
+        {
             total += pdv.data.len();
         }
         assert_eq!(total, 10_000);
     }
 
-    #[test]
-    fn max_pdv_data_len_for_peer_handles_edge_values() {
+    #[tokio::test]
+    async fn max_pdv_data_len_for_peer_handles_edge_values() {
         assert_eq!(max_pdv_data_len_for_peer(0).unwrap(), usize::MAX);
         assert!(max_pdv_data_len_for_peer(8).is_err());
         assert!(max_pdv_data_len_for_peer(12).is_err());

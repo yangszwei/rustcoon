@@ -1,4 +1,3 @@
-use std::net::TcpStream;
 use std::time::Duration;
 
 use dicom_ul::association::server::{AcceptAny, AccessControl, ServerAssociationOptions};
@@ -6,6 +5,7 @@ use rustcoon_application_entity::{
     ApplicationEntityRegistry, AssociationRoutePlan, AssociationRouteTransport,
     LocalApplicationEntity,
 };
+use tokio::net::TcpStream;
 
 use crate::association::UlAssociation;
 use crate::error::UlError;
@@ -142,9 +142,12 @@ where
     }
 
     /// Establish inbound UL association.
-    pub fn establish(self, socket: TcpStream) -> Result<UlAssociation, UlError> {
+    pub async fn establish(self, socket: TcpStream) -> Result<UlAssociation, UlError> {
         let options = self.into_server_options()?;
-        let association = options.establish(socket).map_err(UlError::from)?;
+        let association = options
+            .establish_async(socket)
+            .await
+            .map_err(UlError::from)?;
         Ok(UlAssociation::from_acceptor(association))
     }
 }

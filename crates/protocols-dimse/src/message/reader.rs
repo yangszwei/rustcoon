@@ -33,7 +33,7 @@ impl DimseReader {
 
     /// Read the next command set and decode it into a `CommandObject`.
     /// Fails if the previous command dataset is not yet fully consumed.
-    pub fn read_command_object(
+    pub async fn read_command_object(
         &mut self,
         association: &mut UlAssociation,
     ) -> Result<CommandObject, DimseError> {
@@ -43,7 +43,7 @@ impl DimseReader {
             ));
         }
 
-        let (context_id, command_bytes) = self.read_command_fragments(association)?;
+        let (context_id, command_bytes) = self.read_command_fragments(association).await?;
         validate_presentation_context(association, context_id)?;
 
         let command = InMemDicomObject::read_dataset_with_ts(
@@ -73,7 +73,7 @@ impl DimseReader {
 
     /// Read one dataset PDV for the currently active command.
     /// Returns `Ok(None)` when no dataset is expected or already finished.
-    pub fn read_data_pdv(
+    pub async fn read_data_pdv(
         &mut self,
         association: &mut UlAssociation,
     ) -> Result<Option<PDataValue>, DimseError> {
@@ -87,7 +87,7 @@ impl DimseReader {
             return Ok(None);
         }
 
-        let pdv = self.next_pdv(association)?;
+        let pdv = self.next_pdv(association).await?;
         if pdv.value_type != PDataValueType::Data {
             return Err(DimseError::protocol(
                 "received command PDV while data set was expected",
@@ -118,7 +118,7 @@ impl DimseReader {
         self.bytes_in
     }
 
-    fn read_command_fragments(
+    async fn read_command_fragments(
         &mut self,
         association: &mut UlAssociation,
     ) -> Result<(u8, Vec<u8>), DimseError> {
@@ -126,7 +126,7 @@ impl DimseReader {
         let mut context_id: Option<u8> = None;
 
         loop {
-            let pdv = self.next_pdv(association)?;
+            let pdv = self.next_pdv(association).await?;
             match pdv.value_type {
                 PDataValueType::Command => {
                     match context_id {
@@ -155,13 +155,16 @@ impl DimseReader {
         }
     }
 
-    fn next_pdv(&mut self, association: &mut UlAssociation) -> Result<PDataValue, DimseError> {
+    async fn next_pdv(
+        &mut self,
+        association: &mut UlAssociation,
+    ) -> Result<PDataValue, DimseError> {
         if let Some(pdv) = self.pending_pdvs.pop_front() {
             return Ok(pdv);
         }
 
         loop {
-            match association.receive_pdu()? {
+            match association.receive_pdu().await? {
                 Pdu::PData { data } => {
                     if data.is_empty() {
                         continue;
@@ -255,7 +258,6 @@ mod tests {
     use std::io::ErrorKind;
     use std::net::SocketAddr;
     use std::sync::Arc;
-    use std::thread;
     use std::time::Duration;
 
     use dicom_core::{DataElement, PrimitiveValue, VR};
@@ -281,6 +283,7 @@ mod tests {
             read_timeout_seconds: Some(1),
             write_timeout_seconds: Some(1),
             max_pdu_length,
+            max_concurrent_associations: 64,
         }
     }
 
@@ -295,7 +298,7 @@ mod tests {
         }
     }
 
-    fn setup_ul_pair() -> Option<(UlAssociation, UlAssociation, u8)> {
+    async fn setup_ul_pair() -> Option<(UlAssociation, UlAssociation, u8)> {
         let registry = Arc::new(
             ApplicationEntityRegistry::try_from_config(&ApplicationEntitiesConfig {
                 local: vec![local("REMOTE_SCP", "127.0.0.1:0".parse().ok()?, 16_384)],
@@ -304,7 +307,9 @@ mod tests {
             .ok()?,
         );
 
-        let listener = match UlListener::bind_from_registry(Arc::clone(&registry), "REMOTE_SCP") {
+        let listener = match UlListener::bind_from_registry(Arc::clone(&registry), "REMOTE_SCP")
+            .await
+        {
             Ok(listener) => listener.with_abstract_syntax(VERIFICATION_SOP_CLASS),
             Err(rustcoon_ul::UlError::Io(error)) if error.kind() == ErrorKind::PermissionDenied => {
                 return None;
@@ -312,7 +317,7 @@ mod tests {
             Err(error) => panic!("listener bind should succeed: {error}"),
         };
         let addr = listener.local_addr().expect("listener address");
-        let server = thread::spawn(move || listener.accept().expect("server accept").0);
+        let server = tokio::spawn(async move { listener.accept().await.expect("server accept").0 });
 
         let client = OutboundAssociationRequest::new("LOCAL_SCU", "REMOTE_SCP", addr)
             .connect_timeout(Duration::from_secs(1))
@@ -320,9 +325,10 @@ mod tests {
             .write_timeout(Duration::from_secs(1))
             .with_abstract_syntax(VERIFICATION_SOP_CLASS)
             .establish()
+            .await
             .expect("client establish");
         let context_id = client.presentation_contexts()[0].id;
-        let server_association = server.join().expect("server join");
+        let server_association = server.await.expect("server join");
         Some((server_association, client, context_id))
     }
 
@@ -355,18 +361,24 @@ mod tests {
         bytes
     }
 
-    #[test]
-    fn read_data_pdv_returns_none_without_active_dataset() {
-        let Some((mut server, _client, _context_id)) = setup_ul_pair() else {
+    #[tokio::test]
+    async fn read_data_pdv_returns_none_without_active_dataset() {
+        let Some((mut server, _client, _context_id)) = setup_ul_pair().await else {
             return;
         };
         let mut reader = DimseReader::new();
-        assert!(reader.read_data_pdv(&mut server).expect("read").is_none());
+        assert!(
+            reader
+                .read_data_pdv(&mut server)
+                .await
+                .expect("read")
+                .is_none()
+        );
     }
 
-    #[test]
-    fn reader_handles_pending_pdv_queue_and_finished_dataset_state() {
-        let Some((mut server, mut client, context_id)) = setup_ul_pair() else {
+    #[tokio::test]
+    async fn reader_handles_pending_pdv_queue_and_finished_dataset_state() {
+        let Some((mut server, mut client, context_id)) = setup_ul_pair().await else {
             return;
         };
         let mut reader = DimseReader::new();
@@ -389,6 +401,7 @@ mod tests {
                     },
                 ],
             })
+            .await
             .expect("send command fragments");
         client
             .send_pdu(&Pdu::PData {
@@ -399,23 +412,34 @@ mod tests {
                     data: vec![1, 2, 3],
                 }],
             })
+            .await
             .expect("send data");
 
-        let _ = reader.read_command_object(&mut server).expect("command");
+        let _ = reader
+            .read_command_object(&mut server)
+            .await
+            .expect("command");
         assert!(reader.has_unfinished_data_set());
-        assert!(reader.read_data_pdv(&mut server).expect("data").is_some());
+        assert!(
+            reader
+                .read_data_pdv(&mut server)
+                .await
+                .expect("data")
+                .is_some()
+        );
         assert!(!reader.has_unfinished_data_set());
         assert!(
             reader
                 .read_data_pdv(&mut server)
+                .await
                 .expect("finished")
                 .is_none()
         );
     }
 
-    #[test]
-    fn reader_rejects_command_before_consuming_dataset() {
-        let Some((mut server, mut client, context_id)) = setup_ul_pair() else {
+    #[tokio::test]
+    async fn reader_rejects_command_before_consuming_dataset() {
+        let Some((mut server, mut client, context_id)) = setup_ul_pair().await else {
             return;
         };
         let mut reader = DimseReader::new();
@@ -429,16 +453,20 @@ mod tests {
                     data: bytes,
                 }],
             })
+            .await
             .expect("send command");
 
-        let _ = reader.read_command_object(&mut server).expect("command");
-        let result = reader.read_command_object(&mut server);
+        let _ = reader
+            .read_command_object(&mut server)
+            .await
+            .expect("command");
+        let result = reader.read_command_object(&mut server).await;
         assert!(matches!(result, Err(DimseError::Protocol(_))));
     }
 
-    #[test]
-    fn reader_rejects_invalid_dataset_stream_shapes() {
-        let Some((mut server, mut client, context_id)) = setup_ul_pair() else {
+    #[tokio::test]
+    async fn reader_rejects_invalid_dataset_stream_shapes() {
+        let Some((mut server, mut client, context_id)) = setup_ul_pair().await else {
             return;
         };
         let mut reader = DimseReader::new();
@@ -453,6 +481,7 @@ mod tests {
                     data: bytes,
                 }],
             })
+            .await
             .expect("send command");
         client
             .send_pdu(&Pdu::PData {
@@ -463,13 +492,17 @@ mod tests {
                     data: command_bytes(false),
                 }],
             })
+            .await
             .expect("send wrong type");
 
-        let _ = reader.read_command_object(&mut server).expect("command");
-        let result = reader.read_data_pdv(&mut server);
+        let _ = reader
+            .read_command_object(&mut server)
+            .await
+            .expect("command");
+        let result = reader.read_data_pdv(&mut server).await;
         assert!(matches!(result, Err(DimseError::Protocol(_))));
 
-        let Some((mut server, mut client, context_id)) = setup_ul_pair() else {
+        let Some((mut server, mut client, context_id)) = setup_ul_pair().await else {
             return;
         };
         let mut reader = DimseReader::new();
@@ -482,6 +515,7 @@ mod tests {
                     data: command_bytes(true),
                 }],
             })
+            .await
             .expect("send command");
         client
             .send_pdu(&Pdu::PData {
@@ -492,16 +526,20 @@ mod tests {
                     data: vec![1],
                 }],
             })
+            .await
             .expect("send wrong context");
 
-        let _ = reader.read_command_object(&mut server).expect("command");
-        let result = reader.read_data_pdv(&mut server);
+        let _ = reader
+            .read_command_object(&mut server)
+            .await
+            .expect("command");
+        let result = reader.read_data_pdv(&mut server).await;
         assert!(matches!(result, Err(DimseError::Protocol(_))));
     }
 
-    #[test]
-    fn reader_maps_abort_and_release_pdus_to_expected_errors() {
-        let Some((mut server, mut client, _context_id)) = setup_ul_pair() else {
+    #[tokio::test]
+    async fn reader_maps_abort_and_release_pdus_to_expected_errors() {
+        let Some((mut server, mut client, _context_id)) = setup_ul_pair().await else {
             return;
         };
         let mut reader = DimseReader::new();
@@ -510,27 +548,34 @@ mod tests {
             .send_pdu(&Pdu::AbortRQ {
                 source: AbortRQSource::ServiceUser,
             })
+            .await
             .expect("send abort");
-        let abort = reader.read_command_object(&mut server);
+        let abort = reader.read_command_object(&mut server).await;
         assert!(matches!(
             abort,
             Err(DimseError::Ul(rustcoon_ul::UlError::Aborted))
         ));
 
-        let Some((mut server, mut client, _context_id)) = setup_ul_pair() else {
+        let Some((mut server, mut client, _context_id)) = setup_ul_pair().await else {
             return;
         };
         let mut reader = DimseReader::new();
-        client.send_pdu(&Pdu::ReleaseRQ).expect("send release rq");
-        let rq = reader.read_command_object(&mut server);
+        client
+            .send_pdu(&Pdu::ReleaseRQ)
+            .await
+            .expect("send release rq");
+        let rq = reader.read_command_object(&mut server).await;
         assert!(matches!(rq, Err(DimseError::PeerReleaseRequested)));
 
-        let Some((mut server, mut client, _context_id)) = setup_ul_pair() else {
+        let Some((mut server, mut client, _context_id)) = setup_ul_pair().await else {
             return;
         };
         let mut reader = DimseReader::new();
-        client.send_pdu(&Pdu::ReleaseRP).expect("send release rp");
-        let rp = reader.read_command_object(&mut server);
+        client
+            .send_pdu(&Pdu::ReleaseRP)
+            .await
+            .expect("send release rp");
+        let rp = reader.read_command_object(&mut server).await;
         assert!(matches!(
             rp,
             Err(DimseError::Ul(rustcoon_ul::UlError::Closed))

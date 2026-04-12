@@ -1,9 +1,9 @@
 use std::io::ErrorKind;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::thread;
 use std::time::Duration;
 
+use async_trait::async_trait;
 use dicom_core::{DataElement, PrimitiveValue, VR};
 use dicom_dictionary_std::tags;
 use dicom_object::InMemDicomObject;
@@ -32,6 +32,7 @@ fn local(title: &str, bind: SocketAddr) -> LocalApplicationEntityConfig {
         read_timeout_seconds: Some(1),
         write_timeout_seconds: Some(1),
         max_pdu_length: 16_384,
+        max_concurrent_associations: 64,
     }
 }
 
@@ -73,17 +74,19 @@ fn command_object(command_field: u16, has_data_set: bool) -> InMemDicomObject {
 
 struct ReadOneProvider;
 
+#[async_trait]
 impl ServiceClassProvider for ReadOneProvider {
-    fn handle(&self, ctx: &mut AssociationContext) -> Result<(), DimseError> {
-        let _ = ctx.read_command_object()?;
+    async fn handle(&self, ctx: &mut AssociationContext) -> Result<(), DimseError> {
+        let _ = ctx.read_command_object().await?;
         Ok(())
     }
 }
 
 struct ErrorProvider(&'static str);
 
+#[async_trait]
 impl ServiceClassProvider for ErrorProvider {
-    fn handle(&self, _ctx: &mut AssociationContext) -> Result<(), DimseError> {
+    async fn handle(&self, _ctx: &mut AssociationContext) -> Result<(), DimseError> {
         Err(DimseError::Protocol(self.0.to_string()))
     }
 }
@@ -97,10 +100,10 @@ impl ListenerErrorHandler for FixedHandler {
     }
 }
 
-#[test]
-fn context_reader_and_writer_round_trip_works() {
+#[tokio::test]
+async fn context_reader_and_writer_round_trip_works() {
     let Some((server_association, mut client_association)) =
-        setup_ul_pair(16_384, VERIFICATION_SOP_CLASS)
+        setup_ul_pair(16_384, VERIFICATION_SOP_CLASS).await
     else {
         return;
     };
@@ -129,6 +132,7 @@ fn context_reader_and_writer_round_trip_works() {
             context_id,
             &command_object(0x0030, true),
         )
+        .await
         .expect("client command send");
     writer
         .send_data_pdv(
@@ -140,6 +144,7 @@ fn context_reader_and_writer_round_trip_works() {
                 data: vec![1, 2],
             },
         )
+        .await
         .expect("client dataset send");
     writer
         .send_data_pdv(
@@ -151,25 +156,39 @@ fn context_reader_and_writer_round_trip_works() {
                 data: vec![3],
             },
         )
+        .await
         .expect("client dataset final send");
 
-    let command_object_1 = context.read_command_object().expect("read command object");
+    let command_object_1 = context
+        .read_command_object()
+        .await
+        .expect("read command object");
     assert_eq!(command_object_1.presentation_context_id, context_id);
 
     let command_object_2 = context
         .read_command_object()
+        .await
         .expect("read cached command object");
     assert_eq!(command_object_2.presentation_context_id, context_id);
 
-    let parsed = context.read_command().expect("read parsed command");
+    let parsed = context.read_command().await.expect("read parsed command");
     assert!(parsed.has_data_set);
-    let parsed_cached = context.read_command().expect("read parsed command cached");
+    let parsed_cached = context
+        .read_command()
+        .await
+        .expect("read parsed command cached");
     assert!(parsed_cached.has_data_set);
 
     assert!(context.has_unfinished_data_set());
-    assert!(context.read_data_pdv().expect("data pdv 1").is_some());
-    assert!(context.read_data_pdv().expect("data pdv 2").is_some());
-    assert!(context.read_data_pdv().expect("data pdv done").is_none());
+    assert!(context.read_data_pdv().await.expect("data pdv 1").is_some());
+    assert!(context.read_data_pdv().await.expect("data pdv 2").is_some());
+    assert!(
+        context
+            .read_data_pdv()
+            .await
+            .expect("data pdv done")
+            .is_none()
+    );
     assert!(!context.has_unfinished_data_set());
 
     context
@@ -179,6 +198,7 @@ fn context_reader_and_writer_round_trip_works() {
 
     context
         .send_command_object(context_id, &command_object(0x8030, true))
+        .await
         .expect("server command send");
     context
         .send_data_pdv(PDataValue {
@@ -187,21 +207,25 @@ fn context_reader_and_writer_round_trip_works() {
             is_last: true,
             data: Vec::new(),
         })
+        .await
         .expect("server empty final dataset send");
 
     let mut reader = DimseReader::new();
     let _ = reader
         .read_command_object(&mut client_association)
+        .await
         .expect("client read command");
     assert!(
         reader
             .read_data_pdv(&mut client_association)
+            .await
             .expect("client read data")
             .is_some()
     );
     assert!(
         reader
             .read_data_pdv(&mut client_association)
+            .await
             .expect("client read no more data")
             .is_none()
     );
@@ -209,10 +233,10 @@ fn context_reader_and_writer_round_trip_works() {
     let _association = context.into_association();
 }
 
-#[test]
-fn context_route_plan_and_message_cycle_error_paths_work() {
+#[tokio::test]
+async fn context_route_plan_and_message_cycle_error_paths_work() {
     let Some((server_association, mut client_association)) =
-        setup_ul_pair(16_384, VERIFICATION_SOP_CLASS)
+        setup_ul_pair(16_384, VERIFICATION_SOP_CLASS).await
     else {
         return;
     };
@@ -233,6 +257,7 @@ fn context_route_plan_and_message_cycle_error_paths_work() {
             context_id,
             &command_object(0x0001, true),
         )
+        .await
         .expect("send command");
     writer
         .send_data_pdv(
@@ -244,17 +269,18 @@ fn context_route_plan_and_message_cycle_error_paths_work() {
                 data: vec![9, 9, 9],
             },
         )
+        .await
         .expect("send partial data");
 
-    let _ = context.read_command().expect("read parsed command");
+    let _ = context.read_command().await.expect("read parsed command");
     let result = context.complete_message_cycle();
     assert!(matches!(result, Err(DimseError::Protocol(_))));
 }
 
-#[test]
-fn reader_and_writer_protocol_error_paths_are_reported() {
+#[tokio::test]
+async fn reader_and_writer_protocol_error_paths_are_reported() {
     let Some((mut server_association, mut client_association)) =
-        setup_ul_pair(16_384, VERIFICATION_SOP_CLASS)
+        setup_ul_pair(16_384, VERIFICATION_SOP_CLASS).await
     else {
         return;
     };
@@ -273,28 +299,33 @@ fn reader_and_writer_protocol_error_paths_are_reported() {
     };
     client_association
         .send_pdu(&send_data_as_first)
+        .await
         .expect("send data before command");
-    let result = reader.read_command_object(&mut server_association);
+    let result = reader.read_command_object(&mut server_association).await;
     assert!(matches!(result, Err(DimseError::Protocol(_))));
 
     let bad_command = InMemDicomObject::new_empty();
-    let send_bad = writer.send_command_object(&mut client_association, context_id, &bad_command);
+    let send_bad = writer
+        .send_command_object(&mut client_association, context_id, &bad_command)
+        .await;
     assert!(matches!(send_bad, Err(DimseError::Protocol(_))));
 
-    let wrong_type = writer.send_data_pdv(
-        &mut client_association,
-        PDataValue {
-            presentation_context_id: context_id,
-            value_type: PDataValueType::Command,
-            is_last: true,
-            data: vec![1],
-        },
-    );
+    let wrong_type = writer
+        .send_data_pdv(
+            &mut client_association,
+            PDataValue {
+                presentation_context_id: context_id,
+                value_type: PDataValueType::Command,
+                is_last: true,
+                data: vec![1],
+            },
+        )
+        .await;
     assert!(matches!(wrong_type, Err(DimseError::Protocol(_))));
 }
 
-#[test]
-fn listener_accept_and_default_release_handler_work() {
+#[tokio::test]
+async fn listener_accept_and_default_release_handler_work() {
     let registry = Arc::new(
         ApplicationEntityRegistry::try_from_config(&ApplicationEntitiesConfig {
             local: vec![local(
@@ -308,19 +339,20 @@ fn listener_accept_and_default_release_handler_work() {
         })
         .expect("valid registry"),
     );
-    let listener = match DimseListener::bind_from_registry(Arc::clone(&registry), "REMOTE_SCP") {
-        Ok(listener) => listener.with_abstract_syntax(VERIFICATION_SOP_CLASS),
-        Err(DimseError::Ul(rustcoon_ul::UlError::Io(error)))
-            if error.kind() == ErrorKind::PermissionDenied =>
-        {
-            return;
-        }
-        Err(error) => panic!("listener bind: {error}"),
-    };
+    let listener =
+        match DimseListener::bind_from_registry(Arc::clone(&registry), "REMOTE_SCP").await {
+            Ok(listener) => listener.with_abstract_syntax(VERIFICATION_SOP_CLASS),
+            Err(DimseError::Ul(rustcoon_ul::UlError::Io(error)))
+                if error.kind() == ErrorKind::PermissionDenied =>
+            {
+                return;
+            }
+            Err(error) => panic!("listener bind: {error}"),
+        };
     let listener_addr = listener.local_addr().expect("listener address");
     assert_eq!(listener.local_ae_title().as_str(), "REMOTE_SCP");
 
-    let client = thread::spawn(move || {
+    let client = tokio::spawn(async move {
         let mut association =
             OutboundAssociationRequest::new("LOCAL_SCU", "REMOTE_SCP", listener_addr)
                 .connect_timeout(Duration::from_secs(1))
@@ -328,23 +360,26 @@ fn listener_accept_and_default_release_handler_work() {
                 .write_timeout(Duration::from_secs(1))
                 .with_abstract_syntax(VERIFICATION_SOP_CLASS)
                 .establish()
+                .await
                 .expect("client associate");
 
         association
             .send_pdu(&Pdu::ReleaseRQ)
+            .await
             .expect("send release rq");
-        let pdu = association.receive_pdu().expect("receive release rp");
+        let pdu = association.receive_pdu().await.expect("receive release rp");
         assert!(matches!(pdu, Pdu::ReleaseRP));
     });
 
     listener
         .accept_and_handle(&ReadOneProvider)
+        .await
         .expect("default release handler should complete");
-    client.join().expect("client join");
+    client.await.expect("client join");
 }
 
-#[test]
-fn listener_accept_and_custom_error_handler_paths_work() {
+#[tokio::test]
+async fn listener_accept_and_custom_error_handler_paths_work() {
     let registry = Arc::new(
         ApplicationEntityRegistry::try_from_config(&ApplicationEntitiesConfig {
             local: vec![local(
@@ -358,27 +393,29 @@ fn listener_accept_and_custom_error_handler_paths_work() {
         })
         .expect("valid registry"),
     );
-    let listener = match DimseListener::bind_from_registry(Arc::clone(&registry), "REMOTE_SCP") {
-        Ok(listener) => listener.with_abstract_syntax(VERIFICATION_SOP_CLASS),
-        Err(DimseError::Ul(rustcoon_ul::UlError::Io(error)))
-            if error.kind() == ErrorKind::PermissionDenied =>
-        {
-            return;
-        }
-        Err(error) => panic!("listener bind: {error}"),
-    };
+    let listener =
+        match DimseListener::bind_from_registry(Arc::clone(&registry), "REMOTE_SCP").await {
+            Ok(listener) => listener.with_abstract_syntax(VERIFICATION_SOP_CLASS),
+            Err(DimseError::Ul(rustcoon_ul::UlError::Io(error)))
+                if error.kind() == ErrorKind::PermissionDenied =>
+            {
+                return;
+            }
+            Err(error) => panic!("listener bind: {error}"),
+        };
     let listener_addr = listener.local_addr().expect("listener address");
 
-    let client = thread::spawn(move || {
+    let client = tokio::spawn(async move {
         let association = OutboundAssociationRequest::new("LOCAL_SCU", "REMOTE_SCP", listener_addr)
             .connect_timeout(Duration::from_secs(1))
             .read_timeout(Duration::from_secs(1))
             .write_timeout(Duration::from_secs(1))
             .with_abstract_syntax(VERIFICATION_SOP_CLASS)
             .establish()
+            .await
             .expect("client associate");
-        thread::sleep(Duration::from_millis(50));
-        let _ = association.abort();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        association.abort().await.expect("client abort");
     });
 
     listener
@@ -386,8 +423,9 @@ fn listener_accept_and_custom_error_handler_paths_work() {
             &ErrorProvider("stop now"),
             &FixedHandler(ErrorHandlerAction::Stop),
         )
+        .await
         .expect("stop action should return Ok");
-    client.join().expect("client join");
+    client.await.expect("client join");
 
     let registry = Arc::new(
         ApplicationEntityRegistry::try_from_config(&ApplicationEntitiesConfig {
@@ -402,18 +440,19 @@ fn listener_accept_and_custom_error_handler_paths_work() {
         })
         .expect("valid registry"),
     );
-    let listener = match DimseListener::bind_from_registry(Arc::clone(&registry), "REMOTE_SCP") {
-        Ok(listener) => listener.with_abstract_syntax(VERIFICATION_SOP_CLASS),
-        Err(DimseError::Ul(rustcoon_ul::UlError::Io(error)))
-            if error.kind() == ErrorKind::PermissionDenied =>
-        {
-            return;
-        }
-        Err(error) => panic!("listener bind: {error}"),
-    };
+    let listener =
+        match DimseListener::bind_from_registry(Arc::clone(&registry), "REMOTE_SCP").await {
+            Ok(listener) => listener.with_abstract_syntax(VERIFICATION_SOP_CLASS),
+            Err(DimseError::Ul(rustcoon_ul::UlError::Io(error)))
+                if error.kind() == ErrorKind::PermissionDenied =>
+            {
+                return;
+            }
+            Err(error) => panic!("listener bind: {error}"),
+        };
     let listener_addr = listener.local_addr().expect("listener address");
 
-    let client = thread::spawn(move || {
+    let client = tokio::spawn(async move {
         let mut association =
             OutboundAssociationRequest::new("LOCAL_SCU", "REMOTE_SCP", listener_addr)
                 .connect_timeout(Duration::from_secs(1))
@@ -421,8 +460,9 @@ fn listener_accept_and_custom_error_handler_paths_work() {
                 .write_timeout(Duration::from_secs(1))
                 .with_abstract_syntax(VERIFICATION_SOP_CLASS)
                 .establish()
+                .await
                 .expect("client associate");
-        let observed = association.receive_pdu();
+        let observed = association.receive_pdu().await;
         assert!(matches!(
             observed,
             Ok(Pdu::AbortRQ { .. })
@@ -430,10 +470,12 @@ fn listener_accept_and_custom_error_handler_paths_work() {
         ));
     });
 
-    let result = listener.accept_and_handle_with_handler(
-        &ErrorProvider("abort"),
-        &FixedHandler(ErrorHandlerAction::AbortAndStop),
-    );
+    let result = listener
+        .accept_and_handle_with_handler(
+            &ErrorProvider("abort"),
+            &FixedHandler(ErrorHandlerAction::AbortAndStop),
+        )
+        .await;
     assert!(matches!(result, Err(DimseError::Protocol(_))));
-    client.join().expect("client join");
+    client.await.expect("client join");
 }

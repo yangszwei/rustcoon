@@ -1,8 +1,9 @@
-use std::net::{SocketAddr, TcpListener};
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
 
 use rustcoon_application_entity::{AeTitle, ApplicationEntityRegistry};
+use tokio::net::{TcpListener, TcpStream};
 use tracing::{info, info_span, warn};
 
 use crate::access_control::RegistryAccessControl;
@@ -21,7 +22,7 @@ pub struct UlListener {
 
 impl UlListener {
     /// Bind a listener for the provided local AE from registry data.
-    pub fn bind_from_registry(
+    pub async fn bind_from_registry(
         registry: Arc<ApplicationEntityRegistry>,
         local_ae_title: &str,
     ) -> Result<Self, UlError> {
@@ -29,7 +30,7 @@ impl UlListener {
         let local = registry
             .local(&local_ae_title)
             .ok_or_else(|| UlError::LocalAeNotFound(local_ae_title.to_string()))?;
-        let listener = TcpListener::bind(local.bind_address())?;
+        let listener = TcpListener::bind(local.bind_address()).await?;
         info!(
             op = "listener.bind",
             local_ae_title = local_ae_title.as_str(),
@@ -51,28 +52,34 @@ impl UlListener {
         self
     }
 
-    /// Configure inbound socket accepts as non-blocking.
-    pub fn with_nonblocking_accept(self) -> Result<Self, UlError> {
-        self.listener.set_nonblocking(true)?;
-        Ok(self)
-    }
-
     /// Return listener socket address.
     pub fn local_addr(&self) -> Result<SocketAddr, UlError> {
         Ok(self.listener.local_addr()?)
     }
 
     /// Accept one inbound UL association.
-    pub fn accept(&self) -> Result<(UlAssociation, SocketAddr), UlError> {
+    pub async fn accept(&self) -> Result<(UlAssociation, SocketAddr), UlError> {
+        let (socket, peer_addr) = self.accept_socket().await?;
+        self.establish(socket, peer_addr).await
+    }
+
+    /// Accept one inbound socket without negotiating a UL association.
+    pub async fn accept_socket(&self) -> Result<(TcpStream, SocketAddr), UlError> {
+        Ok(self.listener.accept().await?)
+    }
+
+    /// Establish one inbound UL association on an accepted socket.
+    pub async fn establish(
+        &self,
+        socket: TcpStream,
+        peer_addr: SocketAddr,
+    ) -> Result<(UlAssociation, SocketAddr), UlError> {
         let span = info_span!(
             "rustcoon.ul.listener.accept",
             local_ae_title = self.local_ae_title.as_str(),
         );
         let _entered = span.enter();
         let started_at = Instant::now();
-        let (socket, peer_addr) = self.listener.accept()?;
-        // Keep listener non-blocking for cooperative shutdown, but run UL I/O on blocking streams.
-        socket.set_nonblocking(false)?;
         let local = self
             .registry
             .local(&self.local_ae_title)
@@ -85,7 +92,7 @@ impl UlListener {
             request = request.with_abstract_syntax(abstract_syntax_uid.clone());
         }
 
-        let association = request.establish(socket);
+        let association = request.establish(socket).await;
         match &association {
             Ok(association) => {
                 info!(
@@ -124,6 +131,7 @@ mod tests {
     use rustcoon_config::application_entity::{
         ApplicationEntitiesConfig, LocalApplicationEntityConfig, RemoteApplicationEntityConfig,
     };
+    use tokio::net::{TcpListener, TcpStream};
 
     use super::UlListener;
     use crate::UlError;
@@ -135,6 +143,7 @@ mod tests {
             read_timeout_seconds: Some(30),
             write_timeout_seconds: Some(30),
             max_pdu_length: 16_384,
+            max_concurrent_associations: 64,
         }
     }
 
@@ -149,8 +158,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn bind_from_registry_returns_local_not_found_for_unknown_local_ae() {
+    #[tokio::test]
+    async fn bind_from_registry_returns_local_not_found_for_unknown_local_ae() {
         let registry = std::sync::Arc::new(
             ApplicationEntityRegistry::try_from_config(&ApplicationEntitiesConfig {
                 local: vec![local("KNOWN_LOCAL", "127.0.0.1:11112".parse().unwrap())],
@@ -159,23 +168,27 @@ mod tests {
             .unwrap(),
         );
 
-        let result = UlListener::bind_from_registry(registry, "MISSING_LOCAL");
+        let result = UlListener::bind_from_registry(registry, "MISSING_LOCAL").await;
         assert!(matches!(result, Err(UlError::LocalAeNotFound(_))));
     }
 
-    #[test]
-    fn accept_returns_local_not_found_if_local_ae_removed_from_registry() {
-        let listener = match std::net::TcpListener::bind("127.0.0.1:0") {
+    #[tokio::test]
+    async fn accept_returns_local_not_found_if_local_ae_removed_from_registry() {
+        let std_listener = match std::net::TcpListener::bind("127.0.0.1:0") {
             Ok(listener) => listener,
             Err(error) if error.kind() == ErrorKind::PermissionDenied => return,
             Err(error) => panic!("listener bind should succeed: {error}"),
         };
-        let addr = listener
+        let addr = std_listener
             .local_addr()
             .expect("listener should have local addr");
+        std_listener
+            .set_nonblocking(true)
+            .expect("listener should be nonblocking");
+        let listener = TcpListener::from_std(std_listener).expect("tokio listener");
 
-        let client = std::thread::spawn(move || {
-            let _ = std::net::TcpStream::connect(addr);
+        let client = tokio::spawn(async move {
+            let _ = TcpStream::connect(addr).await;
         });
 
         let registry = std::sync::Arc::new(ApplicationEntityRegistry::default());
@@ -186,8 +199,8 @@ mod tests {
             abstract_syntax_uids: vec!["1.2.840.10008.1.1".to_string()],
         };
 
-        let result = ul_listener.accept();
-        let _ = client.join();
+        let result = ul_listener.accept().await;
+        let _ = client.await;
         assert!(matches!(result, Err(UlError::LocalAeNotFound(_))));
     }
 }

@@ -43,6 +43,9 @@ pub struct LocalApplicationEntityConfig {
     /// Omit to disable write timeout.
     pub write_timeout_seconds: Option<u64>,
 
+    /// Maximum concurrently active inbound associations for this local AE.
+    pub max_concurrent_associations: usize,
+
     /// Maximum incoming/outgoing PDU length negotiated for this AE.
     pub max_pdu_length: u32,
 }
@@ -56,6 +59,7 @@ impl Default for LocalApplicationEntityConfig {
                 .expect("default listen address must be valid"),
             read_timeout_seconds: None,
             write_timeout_seconds: None,
+            max_concurrent_associations: 64,
             max_pdu_length: default_max_pdu_length(),
         }
     }

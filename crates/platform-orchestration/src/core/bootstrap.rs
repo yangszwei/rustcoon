@@ -83,6 +83,7 @@ mod tests {
         RuntimeConfig {
             shutdown_timeout_seconds: 1,
             force_exit_on_timeout: false,
+            dimse: Default::default(),
         }
     }
 

@@ -2,6 +2,7 @@ use std::fs::File;
 use std::io::{BufReader, Seek, SeekFrom, Write};
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use dicom_core::Tag;
 use dicom_dictionary_std::{tags, uids};
 use dicom_encoding::transfer_syntax::TransferSyntaxIndex;
@@ -17,7 +18,6 @@ use rustcoon_dicom::{
 };
 use rustcoon_ingest::{IngestError, IngestRequest, IngestService};
 use tempfile::NamedTempFile;
-use tokio::runtime::{Builder, Handle};
 
 use crate::context::AssociationContext;
 use crate::error::DimseError;
@@ -84,11 +84,12 @@ impl StorageServiceProvider {
     }
 }
 
+#[async_trait]
 impl ServiceClassProvider for StorageServiceProvider {
-    fn handle(&self, ctx: &mut AssociationContext) -> Result<(), DimseError> {
-        let request = CStoreRequest::from_command(&ctx.read_command()?)?;
+    async fn handle(&self, ctx: &mut AssociationContext) -> Result<(), DimseError> {
+        let request = CStoreRequest::from_command(&ctx.read_command().await?)?;
         tracing::debug!(stage = "validate", "C-STORE request validated");
-        let failure = match receive_data_set_to_temp_file(ctx) {
+        let failure = match receive_data_set_to_temp_file(ctx).await {
             Ok(payload_file) => {
                 tracing::debug!(stage = "dataset_received", "C-STORE data set received");
                 match build_ingest_request(ctx, &request, payload_file.as_file()) {
@@ -100,7 +101,7 @@ impl ServiceClassProvider for StorageServiceProvider {
                                 backend = "ingest",
                                 "C-STORE ingest started"
                             );
-                            match block_on_ingest(self.ingest.ingest(ingest_request, &mut reader)) {
+                            match self.ingest.ingest(ingest_request, &mut reader).await {
                                 Ok(_) => None,
                                 Err(error) => {
                                     tracing::warn!(
@@ -139,7 +140,8 @@ impl ServiceClassProvider for StorageServiceProvider {
         };
         let status = response.status.code();
         let response = response.to_command_object();
-        ctx.send_command_object(request.presentation_context_id, &response)?;
+        ctx.send_command_object(request.presentation_context_id, &response)
+            .await?;
         ctx.record_response_status(status);
         tracing::debug!(
             stage = "response",
@@ -199,25 +201,25 @@ impl StoreFailure {
     }
 }
 
-fn drain_remaining_data_set(ctx: &mut AssociationContext) -> Result<(), DimseError> {
-    while ctx.read_data_pdv()?.is_some() {}
+async fn drain_remaining_data_set(ctx: &mut AssociationContext) -> Result<(), DimseError> {
+    while ctx.read_data_pdv().await?.is_some() {}
     Ok(())
 }
 
-fn receive_data_set_to_temp_file(
+async fn receive_data_set_to_temp_file(
     ctx: &mut AssociationContext,
 ) -> Result<NamedTempFile, ReceiveDataSetError> {
     let mut file = match NamedTempFile::new() {
         Ok(file) => file,
         Err(_) => {
-            drain_remaining_data_set(ctx)?;
+            drain_remaining_data_set(ctx).await?;
             return Err(ReceiveDataSetError::Status(CStoreStatus::OutOfResources));
         }
     };
 
-    while let Some(PDataValue { data, .. }) = ctx.read_data_pdv()? {
+    while let Some(PDataValue { data, .. }) = ctx.read_data_pdv().await? {
         if file.write_all(&data).is_err() {
-            drain_remaining_data_set(ctx)?;
+            drain_remaining_data_set(ctx).await?;
             return Err(ReceiveDataSetError::Status(CStoreStatus::OutOfResources));
         }
     }
@@ -442,18 +444,6 @@ fn store_status_error_class(status: CStoreStatus) -> DimseErrorClass {
     }
 }
 
-fn block_on_ingest<T>(future: impl std::future::Future<Output = T>) -> T {
-    if let Ok(handle) = Handle::try_current() {
-        return handle.block_on(future);
-    }
-
-    Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("tokio runtime for C-STORE provider")
-        .block_on(future)
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -461,7 +451,6 @@ mod tests {
     use std::io::Write;
     use std::net::SocketAddr;
     use std::sync::{Arc, Mutex};
-    use std::thread;
     use std::time::Duration;
 
     use async_trait::async_trait;
@@ -602,6 +591,7 @@ mod tests {
             read_timeout_seconds: Some(1),
             write_timeout_seconds: Some(1),
             max_pdu_length: 16_384,
+            max_concurrent_associations: 64,
         }
     }
 
@@ -616,7 +606,7 @@ mod tests {
         }
     }
 
-    fn setup_ul_pair(abstract_syntax_uid: &str) -> Option<(UlAssociation, UlAssociation)> {
+    async fn setup_ul_pair(abstract_syntax_uid: &str) -> Option<(UlAssociation, UlAssociation)> {
         let registry = Arc::new(
             ApplicationEntityRegistry::try_from_config(&ApplicationEntitiesConfig {
                 local: vec![local(
@@ -631,7 +621,9 @@ mod tests {
             .expect("valid registry"),
         );
 
-        let listener = match UlListener::bind_from_registry(Arc::clone(&registry), "REMOTE_SCP") {
+        let listener = match UlListener::bind_from_registry(Arc::clone(&registry), "REMOTE_SCP")
+            .await
+        {
             Ok(listener) => listener.with_abstract_syntax(abstract_syntax_uid),
             Err(rustcoon_ul::UlError::Io(error)) if error.kind() == ErrorKind::PermissionDenied => {
                 return None;
@@ -639,7 +631,7 @@ mod tests {
             Err(error) => panic!("listener should bind: {error}"),
         };
         let addr = listener.local_addr().expect("listener addr");
-        let server = thread::spawn(move || listener.accept().expect("server accept").0);
+        let server = tokio::spawn(async move { listener.accept().await.expect("server accept").0 });
 
         let client = OutboundAssociationRequest::new("LOCAL_SCU", "REMOTE_SCP", addr)
             .connect_timeout(Duration::from_secs(1))
@@ -647,9 +639,10 @@ mod tests {
             .write_timeout(Duration::from_secs(1))
             .with_abstract_syntax(abstract_syntax_uid)
             .establish()
+            .await
             .expect("client establish");
 
-        let server_association = server.join().expect("server join");
+        let server_association = server.await.expect("server join");
         Some((server_association, client))
     }
 
@@ -833,10 +826,10 @@ mod tests {
         assert_eq!(bindings[1].sop_class_uid.as_ref(), uids::MR_IMAGE_STORAGE);
     }
 
-    #[test]
-    fn storage_provider_handles_store_and_returns_success_response() {
+    #[tokio::test]
+    async fn storage_provider_handles_store_and_returns_success_response() {
         let Some((server_association, mut client_association)) =
-            setup_ul_pair(uids::CT_IMAGE_STORAGE)
+            setup_ul_pair(uids::CT_IMAGE_STORAGE).await
         else {
             return;
         };
@@ -861,6 +854,7 @@ mod tests {
 
         DimseWriter::new()
             .send_command_object(&mut client_association, context_id, &c_store_rq_command())
+            .await
             .expect("send C-STORE-RQ command");
 
         let bytes = serialize_data_set(&client_association, context_id, &data_set());
@@ -874,15 +868,18 @@ mod tests {
                     data: bytes,
                 },
             )
+            .await
             .expect("send data set");
 
         let mut server_context = AssociationContext::new(server_association);
         provider
             .handle(&mut server_context)
+            .await
             .expect("handle C-STORE-RQ");
 
         let response = DimseReader::new()
             .read_command_object(&mut client_association)
+            .await
             .expect("read C-STORE-RSP");
         let response = DimseCommand::from_command_object(&response).expect("parse C-STORE-RSP");
         assert_eq!(response.command_field, CommandField::CStoreRsp);
@@ -934,10 +931,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn storage_provider_returns_sop_class_mismatch_status() {
+    #[tokio::test]
+    async fn storage_provider_returns_sop_class_mismatch_status() {
         let Some((server_association, mut client_association)) =
-            setup_ul_pair(uids::CT_IMAGE_STORAGE)
+            setup_ul_pair(uids::CT_IMAGE_STORAGE).await
         else {
             return;
         };
@@ -962,6 +959,7 @@ mod tests {
 
         DimseWriter::new()
             .send_command_object(&mut client_association, context_id, &c_store_rq_command())
+            .await
             .expect("send C-STORE-RQ command");
 
         let mut mismatched_data_set = data_set();
@@ -981,15 +979,18 @@ mod tests {
                     data: bytes,
                 },
             )
+            .await
             .expect("send data set");
 
         let mut server_context = AssociationContext::new(server_association);
         provider
             .handle(&mut server_context)
+            .await
             .expect("handle C-STORE-RQ");
 
         let response = DimseReader::new()
             .read_command_object(&mut client_association)
+            .await
             .expect("read C-STORE-RSP");
         let response = DimseCommand::from_command_object(&response).expect("parse C-STORE-RSP");
         assert_eq!(response.status, Some(0xA900));
@@ -998,10 +999,10 @@ mod tests {
         assert!(state.requests.is_empty());
     }
 
-    #[test]
-    fn storage_provider_returns_cxxx_for_sop_instance_uid_mismatch() {
+    #[tokio::test]
+    async fn storage_provider_returns_cxxx_for_sop_instance_uid_mismatch() {
         let Some((server_association, mut client_association)) =
-            setup_ul_pair(uids::CT_IMAGE_STORAGE)
+            setup_ul_pair(uids::CT_IMAGE_STORAGE).await
         else {
             return;
         };
@@ -1026,6 +1027,7 @@ mod tests {
 
         DimseWriter::new()
             .send_command_object(&mut client_association, context_id, &c_store_rq_command())
+            .await
             .expect("send C-STORE-RQ command");
 
         let mut mismatched_data_set = data_set();
@@ -1041,15 +1043,18 @@ mod tests {
                     data: bytes,
                 },
             )
+            .await
             .expect("send data set");
 
         let mut server_context = AssociationContext::new(server_association);
         provider
             .handle(&mut server_context)
+            .await
             .expect("handle C-STORE-RQ");
 
         let response_object = DimseReader::new()
             .read_command_object(&mut client_association)
+            .await
             .expect("read C-STORE-RSP");
         let response = DimseCommand::from_command_object(&response_object).expect("parse response");
         assert_eq!(response.status, Some(0xC000));
@@ -1067,10 +1072,10 @@ mod tests {
         assert!(state.requests.is_empty());
     }
 
-    #[test]
-    fn storage_provider_rejects_abstract_syntax_mismatch_with_command() {
+    #[tokio::test]
+    async fn storage_provider_rejects_abstract_syntax_mismatch_with_command() {
         let Some((server_association, mut client_association)) =
-            setup_ul_pair(uids::CT_IMAGE_STORAGE)
+            setup_ul_pair(uids::CT_IMAGE_STORAGE).await
         else {
             return;
         };
@@ -1101,6 +1106,7 @@ mod tests {
         ));
         DimseWriter::new()
             .send_command_object(&mut client_association, context_id, &command)
+            .await
             .expect("send C-STORE-RQ command");
 
         let bytes = serialize_data_set(&client_association, context_id, &data_set());
@@ -1114,15 +1120,18 @@ mod tests {
                     data: bytes,
                 },
             )
+            .await
             .expect("send data set");
 
         let mut server_context = AssociationContext::new(server_association);
         provider
             .handle(&mut server_context)
+            .await
             .expect("handle C-STORE-RQ");
 
         let response_object = DimseReader::new()
             .read_command_object(&mut client_association)
+            .await
             .expect("read C-STORE-RSP");
         let response = DimseCommand::from_command_object(&response_object).expect("parse response");
         assert_eq!(response.status, Some(0xC000));
@@ -1137,9 +1146,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn build_ingest_request_extracts_metadata_and_rejects_invalid_datasets() {
-        let Some((server_association, client_association)) = setup_ul_pair(uids::CT_IMAGE_STORAGE)
+    #[tokio::test]
+    async fn build_ingest_request_extracts_metadata_and_rejects_invalid_datasets() {
+        let Some((server_association, client_association)) =
+            setup_ul_pair(uids::CT_IMAGE_STORAGE).await
         else {
             return;
         };
@@ -1194,7 +1204,8 @@ mod tests {
             "PAT-001"
         );
 
-        let Some((server_association, client_association)) = setup_ul_pair(uids::CT_IMAGE_STORAGE)
+        let Some((server_association, client_association)) =
+            setup_ul_pair(uids::CT_IMAGE_STORAGE).await
         else {
             return;
         };
@@ -1209,7 +1220,8 @@ mod tests {
         assert_eq!(failure.status, CStoreStatus::CannotUnderstand);
         assert!(failure.offending_elements.contains(&tags::SERIES_NUMBER));
 
-        let Some((server_association, client_association)) = setup_ul_pair(uids::CT_IMAGE_STORAGE)
+        let Some((server_association, client_association)) =
+            setup_ul_pair(uids::CT_IMAGE_STORAGE).await
         else {
             return;
         };
@@ -1228,7 +1240,8 @@ mod tests {
                 .contains(&tags::STUDY_INSTANCE_UID)
         );
 
-        let Some((server_association, client_association)) = setup_ul_pair(uids::CT_IMAGE_STORAGE)
+        let Some((server_association, client_association)) =
+            setup_ul_pair(uids::CT_IMAGE_STORAGE).await
         else {
             return;
         };
@@ -1299,10 +1312,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn drain_remaining_data_set_consumes_pending_store_payload() {
+    #[tokio::test]
+    async fn drain_remaining_data_set_consumes_pending_store_payload() {
         let Some((server_association, mut client_association)) =
-            setup_ul_pair(uids::CT_IMAGE_STORAGE)
+            setup_ul_pair(uids::CT_IMAGE_STORAGE).await
         else {
             return;
         };
@@ -1310,6 +1323,7 @@ mod tests {
 
         DimseWriter::new()
             .send_command_object(&mut client_association, context_id, &c_store_rq_command())
+            .await
             .expect("send C-STORE-RQ command");
 
         let bytes = serialize_data_set(&client_association, context_id, &data_set());
@@ -1328,16 +1342,19 @@ mod tests {
                         data: chunk,
                     },
                 )
+                .await
                 .expect("send data set fragment");
         }
 
         let mut server_context = AssociationContext::new(server_association);
         let _request =
-            CStoreRequest::from_command(&server_context.read_command().expect("command"))
+            CStoreRequest::from_command(&server_context.read_command().await.expect("command"))
                 .expect("parse request");
         assert!(server_context.has_unfinished_data_set());
 
-        drain_remaining_data_set(&mut server_context).expect("drain remaining dataset");
+        drain_remaining_data_set(&mut server_context)
+            .await
+            .expect("drain remaining dataset");
         assert!(!server_context.has_unfinished_data_set());
         server_context
             .complete_message_cycle()

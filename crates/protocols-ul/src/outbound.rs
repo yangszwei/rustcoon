@@ -81,7 +81,7 @@ impl OutboundAssociationRequest {
     }
 
     /// Build and establish outbound UL association directly from route+registry.
-    pub fn establish_from_route(
+    pub async fn establish_from_route(
         route: &AssociationRoutePlan,
         registry: &ApplicationEntityRegistry,
         abstract_syntax_uids: impl IntoIterator<Item = impl Into<String>>,
@@ -96,7 +96,7 @@ impl OutboundAssociationRequest {
         for abstract_syntax_uid in abstract_syntax_uids {
             request = request.with_abstract_syntax(abstract_syntax_uid.into());
         }
-        request.establish()
+        request.establish().await
     }
 
     /// Add one abstract syntax UID using DICOM UL default transfer syntaxes.
@@ -130,7 +130,7 @@ impl OutboundAssociationRequest {
     }
 
     /// Establish outbound UL association.
-    pub fn establish(self) -> Result<UlAssociation, UlError> {
+    pub async fn establish(self) -> Result<UlAssociation, UlError> {
         if self.abstract_syntax_uids.is_empty() {
             return Err(UlError::MissingAbstractSyntax);
         }
@@ -165,7 +165,7 @@ impl OutboundAssociationRequest {
             options = options.with_abstract_syntax(abstract_syntax_uid);
         }
 
-        let association = options.establish(target);
+        let association = options.establish_async(target).await;
         match &association {
             Ok(association) => {
                 info!(
@@ -218,6 +218,7 @@ mod tests {
             read_timeout_seconds: Some(30),
             write_timeout_seconds: Some(31),
             max_pdu_length: 20_000,
+            max_concurrent_associations: 100,
         }
     }
 
@@ -232,8 +233,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn outbound_from_entities_maps_timeouts_and_max_pdu() {
+    #[tokio::test]
+    async fn outbound_from_entities_maps_timeouts_and_max_pdu() {
         let config = ApplicationEntitiesConfig {
             local: vec![local("LOCAL_AE")],
             remote: vec![remote("REMOTE_AE")],
@@ -246,7 +247,7 @@ mod tests {
         let remote = registry.remote(&"REMOTE_AE".parse().unwrap()).unwrap();
         let request = OutboundAssociationRequest::from_entities(local, remote);
 
-        let result = request.establish();
+        let result = request.establish().await;
         assert!(matches!(result, Err(UlError::MissingAbstractSyntax)));
     }
 
@@ -305,8 +306,8 @@ mod tests {
         assert!(matches!(result, Err(UlError::RemoteAeNotFound(_))));
     }
 
-    #[test]
-    fn outbound_establish_requires_at_least_one_abstract_syntax() {
+    #[tokio::test]
+    async fn outbound_establish_requires_at_least_one_abstract_syntax() {
         let request = OutboundAssociationRequest::new(
             "LOCAL_AE",
             "REMOTE_AE",
@@ -317,7 +318,7 @@ mod tests {
         .write_timeout(Duration::from_secs(3))
         .max_pdu_length(32_768);
 
-        let result = request.establish();
+        let result = request.establish().await;
         assert!(matches!(result, Err(UlError::MissingAbstractSyntax)));
     }
 }

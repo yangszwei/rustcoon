@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use dicom_dictionary_std::tags;
 use rustcoon_retrieve::{RetrieveError, RetrieveQueryModel, RetrieveService};
 
@@ -7,7 +8,7 @@ use crate::context::AssociationContext;
 use crate::error::DimseError;
 use crate::instrumentation::{DimseErrorClass, record_suboperation};
 use crate::service::retrieve::common::{
-    StoreSubOperationStatus, block_on_retrieve, build_retrieve_request, read_identifier_data_set,
+    StoreSubOperationStatus, build_retrieve_request, read_identifier_data_set,
     send_store_sub_operation,
 };
 use crate::service::retrieve::{CGetRequest, CGetResponse, CGetStatus};
@@ -28,9 +29,10 @@ impl CGetServiceProvider {
     }
 }
 
+#[async_trait]
 impl ServiceClassProvider for CGetServiceProvider {
-    fn handle(&self, ctx: &mut AssociationContext) -> Result<(), DimseError> {
-        let request = CGetRequest::from_command(&ctx.read_command()?)?;
+    async fn handle(&self, ctx: &mut AssociationContext) -> Result<(), DimseError> {
+        let request = CGetRequest::from_command(&ctx.read_command().await?)?;
         tracing::debug!(stage = "validate", "C-GET request validated");
 
         let Some(model) = retrieve_model_for_get_sop_class_uid(&request.affected_sop_class_uid)
@@ -42,7 +44,8 @@ impl ServiceClassProvider for CGetServiceProvider {
             ctx.send_command_object(
                 request.presentation_context_id,
                 &response.to_command_object(),
-            )?;
+            )
+            .await?;
             ctx.record_response_status(CGetStatus::IdentifierDoesNotMatchSopClass.code());
             ctx.record_response_error_class(DimseErrorClass::new(
                 "service",
@@ -55,7 +58,9 @@ impl ServiceClassProvider for CGetServiceProvider {
             ctx,
             request.presentation_context_id,
             &request.affected_sop_class_uid,
-        ) {
+        )
+        .await
+        {
             Ok(identifier) => {
                 tracing::debug!(stage = "identifier_decoded", "C-GET identifier decoded");
                 identifier
@@ -66,7 +71,8 @@ impl ServiceClassProvider for CGetServiceProvider {
                 ctx.send_command_object(
                     request.presentation_context_id,
                     &response.to_command_object(),
-                )?;
+                )
+                .await?;
                 ctx.record_response_status(CGetStatus::UnableToProcess.code());
                 ctx.record_response_error_class(DimseErrorClass::new("service", "invalid_dataset"));
                 return Ok(());
@@ -85,7 +91,8 @@ impl ServiceClassProvider for CGetServiceProvider {
                 ctx.send_command_object(
                     request.presentation_context_id,
                     &response.to_command_object(),
-                )?;
+                )
+                .await?;
                 ctx.record_response_status(CGetStatus::IdentifierDoesNotMatchSopClass.code());
                 ctx.record_response_error_class(DimseErrorClass::new("service", "invalid_dataset"));
                 return Ok(());
@@ -97,7 +104,7 @@ impl ServiceClassProvider for CGetServiceProvider {
             backend = "retrieve",
             "C-GET retrieve plan started"
         );
-        let plan = block_on_retrieve(self.retrieve.plan(app_request));
+        let plan = self.retrieve.plan(app_request).await;
         let response = match plan {
             Ok(plan) if plan.total_suboperations == 0 => {
                 tracing::debug!(
@@ -129,7 +136,9 @@ impl ServiceClassProvider for CGetServiceProvider {
                         candidate,
                         message_id,
                         None,
-                    )? {
+                    )
+                    .await?
+                    {
                         StoreSubOperationStatus::Completed => {
                             record_suboperation("c_get_store", "completed");
                             completed = completed.saturating_add(1)
@@ -152,7 +161,8 @@ impl ServiceClassProvider for CGetServiceProvider {
                         ctx.send_command_object(
                             request.presentation_context_id,
                             &pending.to_command_object(),
-                        )?;
+                        )
+                        .await?;
                     }
                 }
 
@@ -184,7 +194,8 @@ impl ServiceClassProvider for CGetServiceProvider {
         ctx.send_command_object(
             request.presentation_context_id,
             &response.to_command_object(),
-        )?;
+        )
+        .await?;
         ctx.record_response_status(status);
         tracing::debug!(
             stage = "response",
