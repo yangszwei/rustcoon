@@ -1,4 +1,19 @@
 services:
+  jaeger:
+    image: cr.jaegertracing.io/jaegertracing/jaeger:2.17.0
+    ports:
+      - "16686:16686"
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.149.0
+    depends_on:
+      - jaeger
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+    volumes:
+      - ./deploy/otel-collector-config.dev.yaml:/etc/otelcol-contrib/config.yaml:ro
+
   postgres:
     image: postgres:18
     environment:
@@ -16,6 +31,15 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql
       - ./migrations/postgres:/docker-entrypoint-initdb.d:ro
+
+  prometheus:
+    image: prom/prometheus:v3.11.1
+    depends_on:
+      - otel-collector
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./deploy/prometheus.dev.yml:/etc/prometheus/prometheus.yml:ro
 
 volumes:
   postgres_data:
