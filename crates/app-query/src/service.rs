@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::time::Instant;
 
 use dicom_core::dictionary::{DataDictionary, DataDictionaryEntry};
 use dicom_core::header::{DataElement, Header};
@@ -11,8 +12,10 @@ use rustcoon_index::{
     AttributePath, CatalogQuery, CatalogReadStore, ItemSelector, MatchingRule, Page, Predicate,
     QueryRetrieveScope, RangeMatching, SequenceMatching,
 };
+use tracing::Instrument;
 
 use crate::error::QueryError;
+use crate::instrumentation;
 use crate::model::{CFindMatch, CFindQueryModel, CFindRequest, CFindResponseLocation, CFindResult};
 
 pub struct QueryService {
@@ -25,33 +28,66 @@ impl QueryService {
     }
 
     pub async fn find(&self, request: CFindRequest) -> Result<CFindResult, QueryError> {
-        let built = build_catalog_query(&request)?;
-        let page = self
-            .index
-            .query(built.query)
-            .await
-            .map_err(QueryError::Catalog)?;
-        let matches = page
-            .items
-            .into_iter()
-            .map(|entry| {
-                response_identifier(
-                    entry.projection,
-                    &built.level,
-                    &request.response_location,
-                    &built.response_fields,
-                    built.specific_character_set.as_ref(),
-                )
-                .map(|identifier| CFindMatch { identifier })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        let span = instrumentation::find_span(&request);
+        let started_at = Instant::now();
+        let model = request.model.label();
+        let mut observed_level = None;
 
-        Ok(CFindResult {
-            matches: Page {
-                items: matches,
-                summary: page.summary,
-            },
-        })
+        let result = async {
+            let built = build_catalog_query(&request)?;
+            instrumentation::record_query_level(&built.level);
+            observed_level = Some(built.level.clone());
+
+            let page = self
+                .index
+                .query(built.query)
+                .instrument(instrumentation::catalog_query_span())
+                .await
+                .map_err(QueryError::Catalog)?;
+            let matches = page
+                .items
+                .into_iter()
+                .map(|entry| {
+                    response_identifier(
+                        entry.projection,
+                        &built.level,
+                        &request.response_location,
+                        &built.response_fields,
+                        built.specific_character_set.as_ref(),
+                    )
+                    .map(|identifier| CFindMatch { identifier })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            instrumentation::record_match_count(matches.len());
+
+            Ok(CFindResult {
+                matches: Page {
+                    items: matches,
+                    summary: page.summary,
+                },
+            })
+        }
+        .instrument(span)
+        .await;
+
+        match &result {
+            Ok(result) => instrumentation::record_find_success(
+                model,
+                observed_level.as_deref().unwrap_or("unknown"),
+                result.matches.items.len(),
+                started_at.elapsed(),
+            ),
+            Err(error) => {
+                instrumentation::record_find_failure(
+                    model,
+                    observed_level.as_deref(),
+                    error,
+                    started_at.elapsed(),
+                );
+            }
+        }
+
+        result
     }
 }
 

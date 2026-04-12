@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Instant;
 
 use dicom_core::Tag;
 use dicom_dictionary_std::tags;
@@ -8,8 +9,10 @@ use rustcoon_index::{
     Predicate, QueryRetrieveScope, SortDirection, SortKey, StudyRootQueryRetrieveLevel,
 };
 use rustcoon_storage::{BlobReadRange, BlobReadStore, BlobReader};
+use tracing::Instrument;
 
 use crate::error::RetrieveError;
+use crate::instrumentation;
 use crate::model::{
     RetrieveInstanceCandidate, RetrieveLevel, RetrievePlan, RetrieveQueryModel, RetrieveRequest,
 };
@@ -25,83 +28,121 @@ impl RetrieveService {
     }
 
     pub async fn plan(&self, request: RetrieveRequest) -> Result<RetrievePlan, RetrieveError> {
-        validate_request(&request)?;
-        let query = build_catalog_query(&request)?;
-        let page = self
-            .index
-            .query(query)
-            .await
-            .map_err(RetrieveError::Catalog)?;
+        let span = instrumentation::plan_span(&request);
+        let started_at = Instant::now();
+        let model = request.model.label();
+        let level = request.level.label();
 
-        let mut instances = Vec::with_capacity(page.items.len());
-        for item in page.items {
-            let sop_instance_uid = projection_uid(&item.projection, tags::SOP_INSTANCE_UID)?;
-            let sop_instance_uid =
-                SopInstanceUid::new(sop_instance_uid.clone()).map_err(|err| {
-                    RetrieveError::invalid_catalog_projection(
-                        tags::SOP_INSTANCE_UID,
-                        err.to_string(),
-                    )
-                })?;
-
-            let entry = self
+        let result = async move {
+            validate_request(&request)?;
+            let query = build_catalog_query(&request)?;
+            let page = self
                 .index
-                .get_instance(&sop_instance_uid)
+                .query(query)
+                .instrument(instrumentation::catalog_query_span())
                 .await
-                .map_err(|source| RetrieveError::ResolveInstance {
-                    sop_instance_uid: sop_instance_uid.to_string(),
-                    source,
-                })?
-                .ok_or_else(|| RetrieveError::MissingCatalogInstance {
-                    sop_instance_uid: sop_instance_uid.to_string(),
-                })?;
+                .map_err(RetrieveError::Catalog)?;
 
-            let blob = entry
-                .blob
-                .ok_or_else(|| RetrieveError::MissingBlobReference {
-                    sop_instance_uid: sop_instance_uid.to_string(),
-                })?;
+            let mut instances = Vec::with_capacity(page.items.len());
+            for item in page.items {
+                let sop_instance_uid = projection_uid(&item.projection, tags::SOP_INSTANCE_UID)?;
+                let sop_instance_uid =
+                    SopInstanceUid::new(sop_instance_uid.clone()).map_err(|err| {
+                        RetrieveError::invalid_catalog_projection(
+                            tags::SOP_INSTANCE_UID,
+                            err.to_string(),
+                        )
+                    })?;
 
-            instances.push(RetrieveInstanceCandidate {
-                identity: entry.record.identity().clone(),
-                transfer_syntax_uid: entry.record.instance().transfer_syntax_uid().cloned(),
-                blob,
+                let entry = self
+                    .index
+                    .get_instance(&sop_instance_uid)
+                    .instrument(instrumentation::catalog_get_instance_span(
+                        &sop_instance_uid,
+                    ))
+                    .await
+                    .map_err(|source| RetrieveError::ResolveInstance {
+                        sop_instance_uid: sop_instance_uid.to_string(),
+                        source,
+                    })?
+                    .ok_or_else(|| RetrieveError::MissingCatalogInstance {
+                        sop_instance_uid: sop_instance_uid.to_string(),
+                    })?;
+
+                let blob = entry
+                    .blob
+                    .ok_or_else(|| RetrieveError::MissingBlobReference {
+                        sop_instance_uid: sop_instance_uid.to_string(),
+                    })?;
+
+                instances.push(RetrieveInstanceCandidate {
+                    identity: entry.record.identity().clone(),
+                    transfer_syntax_uid: entry.record.instance().transfer_syntax_uid().cloned(),
+                    blob,
+                });
+            }
+
+            instances.sort_by(|left, right| {
+                left.identity
+                    .study_instance_uid()
+                    .as_str()
+                    .cmp(right.identity.study_instance_uid().as_str())
+                    .then_with(|| {
+                        left.identity
+                            .series_instance_uid()
+                            .as_str()
+                            .cmp(right.identity.series_instance_uid().as_str())
+                    })
+                    .then_with(|| {
+                        left.identity
+                            .sop_instance_uid()
+                            .as_str()
+                            .cmp(right.identity.sop_instance_uid().as_str())
+                    })
             });
+            instrumentation::record_suboperation_count(instances.len());
+
+            Ok(RetrievePlan {
+                total_suboperations: instances.len(),
+                instances,
+            })
+        }
+        .instrument(span)
+        .await;
+
+        match &result {
+            Ok(plan) => instrumentation::record_plan_success(
+                model,
+                level,
+                plan.total_suboperations,
+                started_at.elapsed(),
+            ),
+            Err(error) => {
+                instrumentation::record_plan_failure(model, level, error, started_at.elapsed());
+            }
         }
 
-        instances.sort_by(|left, right| {
-            left.identity
-                .study_instance_uid()
-                .as_str()
-                .cmp(right.identity.study_instance_uid().as_str())
-                .then_with(|| {
-                    left.identity
-                        .series_instance_uid()
-                        .as_str()
-                        .cmp(right.identity.series_instance_uid().as_str())
-                })
-                .then_with(|| {
-                    left.identity
-                        .sop_instance_uid()
-                        .as_str()
-                        .cmp(right.identity.sop_instance_uid().as_str())
-                })
-        });
-
-        Ok(RetrievePlan {
-            total_suboperations: instances.len(),
-            instances,
-        })
+        result
     }
 
     pub async fn open(
         &self,
         candidate: &RetrieveInstanceCandidate,
     ) -> Result<BlobReader, RetrieveError> {
-        self.storage
+        let span = instrumentation::blob_open_span(candidate);
+        let started_at = Instant::now();
+        let result = self
+            .storage
             .open(&candidate.blob.key)
+            .instrument(span)
             .await
-            .map_err(RetrieveError::OpenBlob)
+            .map_err(RetrieveError::OpenBlob);
+        instrumentation::record_blob_open(
+            "open",
+            result.as_ref().map(|_| ()),
+            started_at.elapsed(),
+        );
+        result
     }
 
     pub async fn open_range(
@@ -109,10 +150,20 @@ impl RetrieveService {
         candidate: &RetrieveInstanceCandidate,
         range: BlobReadRange,
     ) -> Result<BlobReader, RetrieveError> {
-        self.storage
+        let span = instrumentation::blob_open_range_span(candidate);
+        let started_at = Instant::now();
+        let result = self
+            .storage
             .open_range(&candidate.blob.key, range)
+            .instrument(span)
             .await
-            .map_err(RetrieveError::OpenBlobRange)
+            .map_err(RetrieveError::OpenBlobRange);
+        instrumentation::record_blob_open(
+            "open_range",
+            result.as_ref().map(|_| ()),
+            started_at.elapsed(),
+        );
+        result
     }
 }
 

@@ -4,6 +4,7 @@
 //! queries without depending on DIMSE association or message handling.
 
 mod error;
+mod instrumentation;
 mod model;
 mod service;
 

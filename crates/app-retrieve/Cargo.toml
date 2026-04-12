@@ -7,7 +7,9 @@ edition.workspace = true
 dicom-core = "0.9.0"
 dicom-dictionary-std = "0.9.0"
 dicom-object = "0.9.0"
+opentelemetry.workspace = true
 thiserror = "2.0.18"
+tracing.workspace = true
 
 rustcoon-dicom = { path = "../domain-dicom" }
 rustcoon-index = { path = "../ports-index" }

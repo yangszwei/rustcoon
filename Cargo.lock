@@ -1959,11 +1959,13 @@ dependencies = [
  "dicom-core",
  "dicom-dictionary-std",
  "dicom-object",
+ "opentelemetry",
  "rustcoon-dicom",
  "rustcoon-index",
  "rustcoon-storage",
  "thiserror",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -1997,10 +1999,12 @@ dependencies = [
  "dicom-core",
  "dicom-dictionary-std",
  "dicom-object",
+ "opentelemetry",
  "rustcoon-dicom",
  "rustcoon-index",
  "thiserror",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -2011,11 +2015,13 @@ dependencies = [
  "dicom-core",
  "dicom-dictionary-std",
  "dicom-object",
+ "opentelemetry",
  "rustcoon-dicom",
  "rustcoon-index",
  "rustcoon-storage",
  "thiserror",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

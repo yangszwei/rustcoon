@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Instant;
 
 use rustcoon_index::{
     CatalogInstanceEntry, CatalogReadStore, CatalogUpsertOutcome, CatalogWriteStore,
@@ -6,8 +7,10 @@ use rustcoon_index::{
 };
 use rustcoon_storage::{BlobStore, BlobWriteRequest, BlobWriteSession, DurabilityHint};
 use tokio::io::{AsyncRead, AsyncReadExt};
+use tracing::Instrument;
 
 use crate::error::IngestError;
+use crate::instrumentation;
 use crate::keying::BlobKeyResolver;
 use crate::model::{IngestOutcome, IngestRequest, IngestResult};
 
@@ -50,68 +53,114 @@ impl IngestService {
     where
         R: AsyncRead + Unpin + Send,
     {
-        let key = self
-            .key_resolver
-            .resolve(&request.record)
-            .map_err(IngestError::BlobKey)?;
+        let span = instrumentation::instance_span(&request.record);
+        let started_at = Instant::now();
 
-        let mut session = self
-            .storage
-            .begin_write(
-                BlobWriteRequest::new(key.clone())
-                    .with_precondition(request.precondition)
-                    .with_content_type(request.content_type)
-                    .with_durability(request.durability.unwrap_or(DurabilityHint::Durable)),
-            )
-            .await
-            .map_err(IngestError::BeginWrite)?;
+        let result = async move {
+            let key = self
+                .key_resolver
+                .resolve(&request.record)
+                .map_err(IngestError::BlobKey)?;
+            instrumentation::record_blob_key(&key);
 
-        let write_result = self.write_payload(&mut *session, reader).await;
-        if let Err(error) = write_result {
-            return match session.abort().await {
-                Ok(()) => Err(error),
-                Err(abort_error) => Err(IngestError::AbortWrite(abort_error)),
-            };
-        }
+            let mut session = self
+                .storage
+                .begin_write(
+                    BlobWriteRequest::new(key.clone())
+                        .with_precondition(request.precondition)
+                        .with_content_type(request.content_type)
+                        .with_durability(request.durability.unwrap_or(DurabilityHint::Durable)),
+                )
+                .instrument(instrumentation::blob_begin_write_span())
+                .await
+                .map_err(IngestError::BeginWrite)?;
 
-        session.commit().await.map_err(IngestError::CommitWrite)?;
+            let write_result = self
+                .write_payload(&mut *session, reader)
+                .instrument(instrumentation::blob_write_payload_span())
+                .await;
+            if let Err(error) = write_result {
+                return match session
+                    .abort()
+                    .instrument(instrumentation::blob_abort_write_span())
+                    .await
+                {
+                    Ok(()) => Err(error),
+                    Err(abort_error) => Err(IngestError::AbortWrite(abort_error)),
+                };
+            }
 
-        let blob_metadata = self
-            .storage
-            .head(&key)
-            .await
-            .map_err(IngestError::HeadBlob)?;
-        let mut blob = StoredObjectRef::new(blob_metadata.key.clone())
-            .with_size_bytes(blob_metadata.size_bytes);
-        if let Some(version) = blob_metadata.version {
-            blob = blob.with_version(version);
-        }
+            session
+                .commit()
+                .instrument(instrumentation::blob_commit_write_span())
+                .await
+                .map_err(IngestError::CommitWrite)?;
 
-        let index_request = InstanceUpsertRequest::new(request.record.clone())
-            .with_attributes(request.attributes)
-            .with_blob(blob.clone());
+            let blob_metadata = self
+                .storage
+                .head(&key)
+                .instrument(instrumentation::blob_head_span())
+                .await
+                .map_err(IngestError::HeadBlob)?;
+            let mut blob = StoredObjectRef::new(blob_metadata.key.clone())
+                .with_size_bytes(blob_metadata.size_bytes);
+            instrumentation::record_blob_size(blob_metadata.size_bytes);
+            if let Some(version) = blob_metadata.version {
+                blob = blob.with_version(version);
+            }
 
-        match self.catalog_write.upsert_instance(index_request).await {
-            Ok(outcome) => Ok(IngestResult {
-                outcome: map_upsert_outcome(outcome),
-                blob,
-            }),
-            Err(source) => {
-                let rollback_failed = self.storage.delete(&key).await.err();
-                Err(IngestError::CatalogUpdate {
-                    source,
-                    rollback_failed,
-                })
+            let index_request = InstanceUpsertRequest::new(request.record.clone())
+                .with_attributes(request.attributes)
+                .with_blob(blob.clone());
+
+            match self
+                .catalog_write
+                .upsert_instance(index_request)
+                .instrument(instrumentation::catalog_upsert_instance_span())
+                .await
+            {
+                Ok(outcome) => {
+                    let outcome = map_upsert_outcome(outcome);
+                    instrumentation::record_outcome(outcome.label());
+                    Ok(IngestResult { outcome, blob })
+                }
+                Err(source) => {
+                    let rollback_failed = self
+                        .storage
+                        .delete(&key)
+                        .instrument(instrumentation::blob_rollback_delete_span())
+                        .await
+                        .err();
+                    Err(IngestError::CatalogUpdate {
+                        source,
+                        rollback_failed,
+                    })
+                }
             }
         }
+        .instrument(span)
+        .await;
+
+        match &result {
+            Ok(result) => instrumentation::record_ingest_success(
+                result.outcome.label(),
+                started_at.elapsed(),
+                result.blob.size_bytes.unwrap_or(0),
+            ),
+            Err(error) => instrumentation::record_ingest_failure(error, started_at.elapsed()),
+        }
+
+        result
     }
 
     pub async fn existing_instance(
         &self,
         request: &IngestRequest,
     ) -> Result<Option<CatalogInstanceEntry>, rustcoon_index::IndexError> {
+        let span = instrumentation::existing_instance_span(&request.record);
         self.index
             .get_instance(request.record.identity().sop_instance_uid())
+            .instrument(span)
             .await
     }
 
@@ -141,6 +190,16 @@ impl IngestService {
         }
 
         Ok(())
+    }
+}
+
+impl IngestOutcome {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Created => "created",
+            Self::Updated => "updated",
+            Self::Unchanged => "unchanged",
+        }
     }
 }
 

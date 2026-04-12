@@ -4,6 +4,7 @@
 //! workflows without depending on DIMSE or DICOMweb protocol details.
 
 mod error;
+mod instrumentation;
 mod keying;
 mod model;
 mod service;

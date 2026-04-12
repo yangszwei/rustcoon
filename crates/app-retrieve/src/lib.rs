@@ -4,6 +4,7 @@
 //! and payload readers without depending on DIMSE association details.
 
 mod error;
+mod instrumentation;
 mod model;
 mod service;
 
