@@ -10,4 +10,4 @@ tracing.workspace = true
 rustcoon-config = { path = "../platform-config" }
 
 [dev-dependencies]
-dicom-ul = "0.9"
+dicom-ul = "0.9.1"

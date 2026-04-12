@@ -262,9 +262,9 @@ dependencies = [
 
 [[package]]
 name = "dicom-core"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "31f6e9f0a581bffa2630b1bd381d8114b09b3f66d1ed76ab924104ad153e0c59"
+checksum = "2fdbd35275bc59b88c78e1a3cb73b9162f00e0157e6677d7a8a713d996b4c239"
 dependencies = [
  "chrono",
  "either",
@@ -287,9 +287,9 @@ dependencies = [
 
 [[package]]
 name = "dicom-encoding"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6076f4ef3627291ab2b5beecd2fde1df7f8e0219b8d1fe4ec45a773416409f13"
+checksum = "56549901e22b413185a8d81abf3247bd221e9c61463e549aa425e19192594ad6"
 dependencies = [
  "byteordered",
  "dicom-core",
@@ -316,9 +316,9 @@ dependencies = [
 
 [[package]]
 name = "dicom-object"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e550fd9def08c12b64e0410e83cb491821767d62e59b74d8b960c12ebd51490"
+checksum = "856997c674ce9968cb8c8c712121a1234f4e7b135abf82e68976c88a5cd4fa1e"
 dependencies = [
  "byteordered",
  "dicom-core",
@@ -334,9 +334,9 @@ dependencies = [
 
 [[package]]
 name = "dicom-parser"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e73d8c380a0655e819adf06263b2144d0ac55120aa3a66f2f6848b15e3de93e8"
+checksum = "00cf850526cebadfc09f436c05131a3b3aca8448e778173baca007f3d9080011"
 dependencies = [
  "dicom-core",
  "dicom-dictionary-std",
@@ -348,9 +348,9 @@ dependencies = [
 
 [[package]]
 name = "dicom-transfer-syntax-registry"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b680acd7f349598f94f3291266196ed687150af5ff57691184a493e5cfce090d"
+checksum = "791d6e5edc1a12398279ace1dd9f31c11cdb3ce2a7b8c324e656238540320d09"
 dependencies = [
  "byteordered",
  "dicom-core",
@@ -364,12 +364,13 @@ dependencies = [
 
 [[package]]
 name = "dicom-ul"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "68ddedfa3a1d3667147dd1fa3dfef2bc496ae2951bffbf3e8504ab1e7d2db76e"
+checksum = "c254c2ab74163e7e76be58887b9b1ed46d58c19063a625bc9832b50f70c47665"
 dependencies = [
  "byteordered",
  "bytes",
+ "cfg-if",
  "dicom-encoding",
  "dicom-transfer-syntax-registry",
  "snafu",

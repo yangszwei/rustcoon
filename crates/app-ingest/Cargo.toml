@@ -15,7 +15,7 @@ rustcoon-storage = { path = "../ports-storage" }
 
 [dev-dependencies]
 async-trait = "0.1.89"
-dicom-core = "0.9.0"
+dicom-core = "0.9.1"
 dicom-dictionary-std = "0.9.0"
-dicom-object = "0.9.0"
+dicom-object = "0.9.1"
 tokio = { version = "1.50.0", features = ["io-util", "macros", "rt"] }

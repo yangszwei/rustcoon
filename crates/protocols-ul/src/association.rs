@@ -3,6 +3,7 @@ use std::time::Instant;
 
 use dicom_ul::association::client::ClientAssociation;
 use dicom_ul::association::server::ServerAssociation;
+use dicom_ul::association::{Association, SyncAssociation};
 use dicom_ul::pdu::{Pdu, PresentationContextNegotiated};
 use tracing::{Level, info, trace, warn};
 
@@ -50,7 +51,7 @@ impl UlAssociation {
 
     pub(crate) fn from_acceptor(association: ServerAssociation<TcpStream>) -> Self {
         record_association_established(AssociationRole::Acceptor);
-        let peer_ae_title = Some(association.client_ae_title().to_string());
+        let peer_ae_title = Some(Association::peer_ae_title(&association).to_string());
         Self {
             role: AssociationRole::Acceptor,
             peer_ae_title,
@@ -85,10 +86,10 @@ impl UlAssociation {
             .expect("association must be present while value is alive");
         let result = match association {
             UlAssociationInner::Requestor(association) => {
-                association.send(pdu).map_err(UlError::from)
+                SyncAssociation::send(association, pdu).map_err(UlError::from)
             }
             UlAssociationInner::Acceptor(association) => {
-                association.send(pdu).map_err(UlError::from)
+                SyncAssociation::send(association, pdu).map_err(UlError::from)
             }
         };
 
@@ -133,10 +134,10 @@ impl UlAssociation {
             .expect("association must be present while value is alive");
         let result = match association {
             UlAssociationInner::Requestor(association) => {
-                association.receive().map_err(UlError::from)
+                SyncAssociation::receive(association).map_err(UlError::from)
             }
             UlAssociationInner::Acceptor(association) => {
-                association.receive().map_err(UlError::from)
+                SyncAssociation::receive(association).map_err(UlError::from)
             }
         };
 
@@ -171,8 +172,12 @@ impl UlAssociation {
             .as_ref()
             .expect("association must be present while value is alive");
         match association {
-            UlAssociationInner::Requestor(association) => association.presentation_contexts(),
-            UlAssociationInner::Acceptor(association) => association.presentation_contexts(),
+            UlAssociationInner::Requestor(association) => {
+                Association::presentation_contexts(association)
+            }
+            UlAssociationInner::Acceptor(association) => {
+                Association::presentation_contexts(association)
+            }
         }
     }
 
@@ -183,8 +188,12 @@ impl UlAssociation {
             .as_ref()
             .expect("association must be present while value is alive");
         match association {
-            UlAssociationInner::Requestor(association) => association.requestor_max_pdu_length(),
-            UlAssociationInner::Acceptor(association) => association.acceptor_max_pdu_length(),
+            UlAssociationInner::Requestor(association) => {
+                Association::local_max_pdu_length(association)
+            }
+            UlAssociationInner::Acceptor(association) => {
+                Association::local_max_pdu_length(association)
+            }
         }
     }
 
@@ -195,8 +204,12 @@ impl UlAssociation {
             .as_ref()
             .expect("association must be present while value is alive");
         match association {
-            UlAssociationInner::Requestor(association) => association.acceptor_max_pdu_length(),
-            UlAssociationInner::Acceptor(association) => association.requestor_max_pdu_length(),
+            UlAssociationInner::Requestor(association) => {
+                Association::peer_max_pdu_length(association)
+            }
+            UlAssociationInner::Acceptor(association) => {
+                Association::peer_max_pdu_length(association)
+            }
         }
     }
 
@@ -211,15 +224,15 @@ impl UlAssociation {
             .expect("association must be present while value is alive");
         let result = match association {
             UlAssociationInner::Requestor(association) => {
-                association.release().map_err(UlError::from)
+                SyncAssociation::release(association).map_err(UlError::from)
             }
             UlAssociationInner::Acceptor(mut association) => {
-                association.send(&Pdu::ReleaseRQ).map_err(UlError::from)?;
+                SyncAssociation::send(&mut association, &Pdu::ReleaseRQ).map_err(UlError::from)?;
                 let should_reply_release_rp = classify_acceptor_release_response(
-                    association.receive().map_err(UlError::from)?,
+                    SyncAssociation::receive(&mut association).map_err(UlError::from)?,
                 )?;
                 if should_reply_release_rp {
-                    association.send(&Pdu::ReleaseRP).map_err(UlError::from)
+                    SyncAssociation::send(&mut association, &Pdu::ReleaseRP).map_err(UlError::from)
                 } else {
                     Ok(())
                 }
@@ -259,9 +272,11 @@ impl UlAssociation {
             .expect("association must be present while value is alive");
         let result = match association {
             UlAssociationInner::Requestor(association) => {
-                association.abort().map_err(UlError::from)
+                SyncAssociation::abort(association).map_err(UlError::from)
             }
-            UlAssociationInner::Acceptor(association) => association.abort().map_err(UlError::from),
+            UlAssociationInner::Acceptor(association) => {
+                SyncAssociation::abort(association).map_err(UlError::from)
+            }
         };
 
         match &result {

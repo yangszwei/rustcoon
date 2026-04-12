@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-dicom-ul = "0.9"
+dicom-ul = "0.9.1"
 opentelemetry.workspace = true
 thiserror = "2.0.18"
 tracing.workspace = true
