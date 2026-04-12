@@ -18,8 +18,15 @@ impl VerificationServiceProvider {
 impl ServiceClassProvider for VerificationServiceProvider {
     fn handle(&self, ctx: &mut AssociationContext) -> Result<(), DimseError> {
         let request = CEchoRequest::from_command(&ctx.read_command()?)?;
+        tracing::debug!(stage = "validate", "C-ECHO request validated");
         let response = CEchoResponse::success_for(&request).to_command_object();
         ctx.send_command_object(request.presentation_context_id, &response)?;
+        ctx.record_response_status(0x0000);
+        tracing::debug!(
+            stage = "response",
+            status = "0x0000",
+            "C-ECHO response sent"
+        );
         Ok(())
     }
 }

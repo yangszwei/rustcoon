@@ -21,6 +21,7 @@ use tokio::runtime::{Builder, Handle};
 
 use crate::context::AssociationContext;
 use crate::error::DimseError;
+use crate::instrumentation::DimseErrorClass;
 use crate::service::store::{CStoreRequest, CStoreResponse, CStoreStatus};
 use crate::service::{
     CommandField, DescribedServiceClassProvider, ServiceBinding, ServiceClassProvider,
@@ -86,28 +87,46 @@ impl StorageServiceProvider {
 impl ServiceClassProvider for StorageServiceProvider {
     fn handle(&self, ctx: &mut AssociationContext) -> Result<(), DimseError> {
         let request = CStoreRequest::from_command(&ctx.read_command()?)?;
+        tracing::debug!(stage = "validate", "C-STORE request validated");
         let failure = match receive_data_set_to_temp_file(ctx) {
-            Ok(payload_file) => match build_ingest_request(ctx, &request, payload_file.as_file()) {
-                Ok(ingest_request) => match payload_file.reopen() {
-                    Ok(std_file) => {
-                        let mut reader = tokio::fs::File::from_std(std_file);
-                        match block_on_ingest(self.ingest.ingest(ingest_request, &mut reader)) {
-                            Ok(_) => None,
-                            Err(error) => Some(map_ingest_error_status(&error)),
+            Ok(payload_file) => {
+                tracing::debug!(stage = "dataset_received", "C-STORE data set received");
+                match build_ingest_request(ctx, &request, payload_file.as_file()) {
+                    Ok(ingest_request) => match payload_file.reopen() {
+                        Ok(std_file) => {
+                            let mut reader = tokio::fs::File::from_std(std_file);
+                            tracing::debug!(
+                                stage = "backend_call",
+                                backend = "ingest",
+                                "C-STORE ingest started"
+                            );
+                            match block_on_ingest(self.ingest.ingest(ingest_request, &mut reader)) {
+                                Ok(_) => None,
+                                Err(error) => {
+                                    tracing::warn!(
+                                        stage = "backend_failure",
+                                        backend = "ingest",
+                                        error = %error,
+                                        "C-STORE ingest failed"
+                                    );
+                                    Some(map_ingest_error_status(&error))
+                                }
+                            }
                         }
-                    }
-                    Err(_) => Some(StoreFailure::out_of_resources(
-                        "failed to reopen temporary payload storage",
-                    )),
-                },
-                Err(failure) => Some(failure),
-            },
+                        Err(_) => Some(StoreFailure::out_of_resources(
+                            "failed to reopen temporary payload storage",
+                        )),
+                    },
+                    Err(failure) => Some(failure),
+                }
+            }
             Err(ReceiveDataSetError::Dimse(error)) => return Err(error),
             Err(ReceiveDataSetError::Status(status)) => Some(StoreFailure::new(status)),
         };
 
         let response = if let Some(failure) = failure {
             let mut response = CStoreResponse::for_request(&request, failure.status);
+            ctx.record_response_error_class(store_status_error_class(failure.status));
             if let Some(comment) = failure.error_comment {
                 response = response.with_error_comment(comment);
             }
@@ -117,9 +136,16 @@ impl ServiceClassProvider for StorageServiceProvider {
             response
         } else {
             CStoreResponse::success_for(&request)
-        }
-        .to_command_object();
+        };
+        let status = response.status.code();
+        let response = response.to_command_object();
         ctx.send_command_object(request.presentation_context_id, &response)?;
+        ctx.record_response_status(status);
+        tracing::debug!(
+            stage = "response",
+            status = format!("0x{status:04X}"),
+            "C-STORE response sent"
+        );
         Ok(())
     }
 }
@@ -402,6 +428,17 @@ fn map_ingest_error_status(error: &IngestError) -> StoreFailure {
                 Some("failed while processing received instance payload".to_string());
             failure
         }
+    }
+}
+
+fn store_status_error_class(status: CStoreStatus) -> DimseErrorClass {
+    match status {
+        CStoreStatus::Success => DimseErrorClass::new("service", "unknown"),
+        CStoreStatus::OutOfResources => DimseErrorClass::new("backend", "out_of_resources"),
+        CStoreStatus::DataSetDoesNotMatchSopClass => {
+            DimseErrorClass::new("service", "invalid_dataset")
+        }
+        CStoreStatus::CannotUnderstand => DimseErrorClass::new("service", "unable_to_process"),
     }
 }
 

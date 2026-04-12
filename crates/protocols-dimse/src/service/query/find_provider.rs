@@ -15,6 +15,7 @@ use tokio::runtime::{Builder, Handle};
 
 use crate::context::AssociationContext;
 use crate::error::DimseError;
+use crate::instrumentation::DimseErrorClass;
 use crate::service::query::{CFindRequest, CFindResponse, CFindStatus};
 use crate::service::{
     CommandField, DescribedServiceClassProvider, ServiceBinding, ServiceClassProvider,
@@ -90,6 +91,7 @@ impl QueryServiceProvider {
 impl ServiceClassProvider for QueryServiceProvider {
     fn handle(&self, ctx: &mut AssociationContext) -> Result<(), DimseError> {
         let request = CFindRequest::from_command(&ctx.read_command()?)?;
+        tracing::debug!(stage = "validate", "C-FIND request validated");
         let query_model = match Self::find_model_for_sop_class_uid(&request.affected_sop_class_uid)
         {
             Ok(model) => model,
@@ -100,7 +102,10 @@ impl ServiceClassProvider for QueryServiceProvider {
         };
 
         let identifier = match read_identifier_data_set(ctx, &request) {
-            Ok(identifier) => identifier,
+            Ok(identifier) => {
+                tracing::debug!(stage = "identifier_decoded", "C-FIND identifier decoded");
+                identifier
+            }
             Err(failure) => {
                 send_failure_response(ctx, &request, failure)?;
                 return Ok(());
@@ -116,14 +121,31 @@ impl ServiceClassProvider for QueryServiceProvider {
             paging: None,
         };
 
+        tracing::debug!(
+            stage = "backend_call",
+            backend = "query",
+            "C-FIND query started"
+        );
         let result = block_on_query(self.query.find(app_request));
         let result = match result {
             Ok(result) => result,
             Err(error) => {
+                tracing::warn!(
+                    stage = "backend_failure",
+                    backend = "query",
+                    error = %error,
+                    "C-FIND query failed"
+                );
                 send_failure_response(ctx, &request, map_query_error(error))?;
                 return Ok(());
             }
         };
+        tracing::debug!(
+            stage = "backend_complete",
+            backend = "query",
+            match_count = result.matches.items.len() as u64,
+            "C-FIND query completed"
+        );
 
         for matched in result.matches.items {
             let response = CFindResponse::pending_for(&request).to_command_object();
@@ -138,6 +160,12 @@ impl ServiceClassProvider for QueryServiceProvider {
 
         let response = CFindResponse::success_for(&request).to_command_object();
         ctx.send_command_object(request.presentation_context_id, &response)?;
+        ctx.record_response_status(CFindStatus::Success.code());
+        tracing::debug!(
+            stage = "response",
+            status = "0x0000",
+            "C-FIND response sent"
+        );
         Ok(())
     }
 }
@@ -164,6 +192,7 @@ fn send_failure_response(
     failure: CFindFailure,
 ) -> Result<(), DimseError> {
     let mut response = CFindResponse::for_request(request, failure.status);
+    ctx.record_response_error_class(c_find_status_error_class(failure.status));
     for tag in failure.offending_elements {
         response = response.with_offending_element(tag);
     }
@@ -174,6 +203,13 @@ fn send_failure_response(
         request.presentation_context_id,
         &response.to_command_object(),
     )?;
+    let status = failure.status.code();
+    ctx.record_response_status(status);
+    tracing::debug!(
+        stage = "response",
+        status = format!("0x{status:04X}"),
+        "C-FIND failure response sent"
+    );
     Ok(())
 }
 
@@ -215,6 +251,17 @@ fn map_query_error(error: QueryError) -> CFindFailure {
             CFindFailure::new(CFindStatus::UnableToProcess)
                 .with_error_comment("query could not be processed")
         }
+    }
+}
+
+fn c_find_status_error_class(status: CFindStatus) -> DimseErrorClass {
+    match status {
+        CFindStatus::Pending | CFindStatus::Success => DimseErrorClass::new("service", "unknown"),
+        CFindStatus::OutOfResources => DimseErrorClass::new("backend", "out_of_resources"),
+        CFindStatus::IdentifierDoesNotMatchSopClass => {
+            DimseErrorClass::new("service", "invalid_dataset")
+        }
+        CFindStatus::UnableToProcess => DimseErrorClass::new("service", "unable_to_process"),
     }
 }
 

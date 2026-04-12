@@ -4,6 +4,7 @@ use rustcoon_application_entity::{AeTitle, AssociationRoutePlan};
 use rustcoon_ul::UlAssociation;
 
 use crate::error::DimseError;
+use crate::instrumentation::DimseErrorClass;
 use crate::message::{CommandObject, DimseReader, DimseWriter};
 use crate::service::DimseCommand;
 
@@ -32,6 +33,10 @@ impl AeRouteContext {
 pub struct AssociationContext {
     association: UlAssociation,
     route: Option<AeRouteContext>,
+    association_id: u64,
+    next_request_id: u64,
+    response_status: Option<u16>,
+    response_error_class: Option<DimseErrorClass>,
     reader: DimseReader,
     writer: DimseWriter,
     cached_command_object: Option<CommandObject>,
@@ -44,6 +49,10 @@ impl AssociationContext {
         Self {
             association,
             route: None,
+            association_id: 0,
+            next_request_id: 1,
+            response_status: None,
+            response_error_class: None,
             reader: DimseReader::new(),
             writer: DimseWriter::new(),
             cached_command_object: None,
@@ -62,9 +71,47 @@ impl AssociationContext {
         self.with_route(AeRouteContext::from_route(route))
     }
 
+    /// Attach observability metadata for logs, traces, and metrics.
+    pub fn with_association_id(mut self, association_id: u64) -> Self {
+        self.association_id = association_id;
+        self
+    }
+
     /// Access optional route metadata.
     pub fn route(&self) -> Option<&AeRouteContext> {
         self.route.as_ref()
+    }
+
+    pub(crate) fn association_id(&self) -> u64 {
+        self.association_id
+    }
+
+    pub(crate) fn next_request_id(&mut self) -> u64 {
+        let request_id = self.next_request_id;
+        self.next_request_id = self.next_request_id.saturating_add(1);
+        self.response_status = None;
+        self.response_error_class = None;
+        request_id
+    }
+
+    pub(crate) fn record_response_status(&mut self, status: u16) {
+        self.response_status = Some(status);
+    }
+
+    pub(crate) fn record_response_error_class(&mut self, class: DimseErrorClass) {
+        self.response_error_class = Some(class);
+    }
+
+    pub(crate) fn response_status(&self) -> Option<u16> {
+        self.response_status
+    }
+
+    pub(crate) fn response_error_class(&self) -> Option<DimseErrorClass> {
+        self.response_error_class
+    }
+
+    pub(crate) fn cached_command(&self) -> Option<&DimseCommand> {
+        self.cached_command.as_ref()
     }
 
     /// Borrow the underlying UL association.

@@ -7,7 +7,9 @@ use rustcoon_ul::UlListener;
 
 use crate::error::DimseError;
 use crate::error_handler::{DefaultErrorHandler, ErrorHandlerAction, ListenerErrorHandler};
-use crate::instrumentation::ListenerAcceptInstrumentation;
+use crate::instrumentation::{
+    DimseOutcome, DimseRequestInstrumentation, ListenerAcceptInstrumentation, next_association_id,
+};
 use crate::service::ServiceClassProvider;
 use crate::{AeRouteContext, AssociationContext};
 
@@ -69,6 +71,13 @@ impl DimseListener {
     /// Accept one inbound DIMSE association.
     /// The returned context owns exactly one established UL association.
     pub fn accept(&self) -> Result<(AssociationContext, SocketAddr), DimseError> {
+        self.accept_with_association_id(next_association_id())
+    }
+
+    fn accept_with_association_id(
+        &self,
+        association_id: u64,
+    ) -> Result<(AssociationContext, SocketAddr), DimseError> {
         let (association, peer_addr) = self.listener.accept()?;
         let route = AeRouteContext {
             calling_ae_title: association
@@ -77,7 +86,9 @@ impl DimseListener {
             called_ae_title: self.local_ae_title.clone(),
         };
         Ok((
-            AssociationContext::new(association).with_route(route),
+            AssociationContext::new(association)
+                .with_route(route)
+                .with_association_id(association_id),
             peer_addr,
         ))
     }
@@ -94,55 +105,125 @@ impl DimseListener {
         provider: &dyn ServiceClassProvider,
         error_handler: &dyn ListenerErrorHandler,
     ) -> Result<(), DimseError> {
-        let (mut ctx, peer_addr) = self.accept()?;
+        let association_id = next_association_id();
+        let called_ae_title = self.local_ae_title.as_str().to_string();
+        let instrumentation =
+            ListenerAcceptInstrumentation::new(association_id, called_ae_title.as_str());
+        let _association_span = instrumentation.span().enter();
+        let (mut ctx, peer_addr) = self.accept_with_association_id(association_id)?;
         let calling_ae_title = ctx
             .route()
             .and_then(|route| route.calling_ae_title.as_ref())
             .map(AeTitle::as_str)
-            .unwrap_or("UNKNOWN");
-        let instrumentation = ListenerAcceptInstrumentation::new(
-            peer_addr,
-            calling_ae_title,
-            self.local_ae_title.as_str(),
-        );
-        instrumentation.log_accepted();
+            .unwrap_or("UNKNOWN")
+            .to_string();
+        instrumentation.log_accepted(peer_addr, calling_ae_title.as_str());
 
         loop {
-            match provider.handle(&mut ctx) {
-                Ok(()) => {}
-                Err(error) => match error_handler.on_error(&error) {
-                    ErrorHandlerAction::Continue => continue,
-                    ErrorHandlerAction::Stop => {
-                        instrumentation.log_complete(
-                            "stopped",
-                            None,
-                            ctx.bytes_in(),
-                            ctx.bytes_out(),
-                        );
-                        break;
+            let request_start_bytes_in = ctx.bytes_in();
+            let request_start_bytes_out = ctx.bytes_out();
+            let request_id = ctx.next_request_id();
+            let mut request_instrumentation = DimseRequestInstrumentation::new(
+                ctx.association_id(),
+                request_id,
+                peer_addr,
+                calling_ae_title.as_str(),
+                called_ae_title.as_str(),
+            );
+            request_instrumentation.log_accepted();
+            let request_result = {
+                let _entered = request_instrumentation.span().enter();
+                provider.handle(&mut ctx)
+            }
+            .and_then(|()| {
+                ctx.complete_message_cycle()?;
+                Ok(())
+            });
+
+            match request_result {
+                Ok(()) => {
+                    if let Some(command) = ctx.cached_command() {
+                        request_instrumentation.record_decoded(command);
                     }
-                    ErrorHandlerAction::SendReleaseAndStop => {
-                        ctx.association_mut().send_pdu(&Pdu::ReleaseRP)?;
-                        instrumentation.log_complete(
-                            "completed",
-                            Some(0x0000),
-                            ctx.bytes_in(),
-                            ctx.bytes_out(),
-                        );
-                        break;
+                    let outcome = if let Some(class) = ctx.response_error_class() {
+                        request_instrumentation
+                            .record_error_class(class, "DIMSE response status indicates failure");
+                        DimseOutcome::Failed
+                    } else {
+                        DimseOutcome::Completed
+                    };
+                    request_instrumentation.complete(
+                        outcome,
+                        ctx.response_status(),
+                        ctx.bytes_in().saturating_sub(request_start_bytes_in),
+                        ctx.bytes_out().saturating_sub(request_start_bytes_out),
+                    );
+                }
+                Err(error) => {
+                    if let Some(command) = ctx.cached_command() {
+                        request_instrumentation.record_decoded(command);
                     }
-                    ErrorHandlerAction::AbortAndStop => {
-                        instrumentation.log_complete(
-                            "aborted",
-                            None,
-                            ctx.bytes_in(),
-                            ctx.bytes_out(),
-                        );
-                        let association = ctx.into_association();
-                        let _ = association.abort();
-                        return Err(error);
+                    request_instrumentation.record_failure(&error);
+                    match error_handler.on_error(&error) {
+                        ErrorHandlerAction::Continue => {
+                            request_instrumentation.complete(
+                                DimseOutcome::Failed,
+                                ctx.response_status(),
+                                ctx.bytes_in().saturating_sub(request_start_bytes_in),
+                                ctx.bytes_out().saturating_sub(request_start_bytes_out),
+                            );
+                            continue;
+                        }
+                        ErrorHandlerAction::Stop => {
+                            request_instrumentation.complete(
+                                DimseOutcome::Stopped,
+                                ctx.response_status(),
+                                ctx.bytes_in().saturating_sub(request_start_bytes_in),
+                                ctx.bytes_out().saturating_sub(request_start_bytes_out),
+                            );
+                            instrumentation.log_complete(
+                                "stopped",
+                                None,
+                                ctx.bytes_in(),
+                                ctx.bytes_out(),
+                            );
+                            break;
+                        }
+                        ErrorHandlerAction::SendReleaseAndStop => {
+                            ctx.association_mut().send_pdu(&Pdu::ReleaseRP)?;
+                            request_instrumentation.complete(
+                                DimseOutcome::Completed,
+                                Some(0x0000),
+                                ctx.bytes_in().saturating_sub(request_start_bytes_in),
+                                ctx.bytes_out().saturating_sub(request_start_bytes_out),
+                            );
+                            instrumentation.log_complete(
+                                "completed",
+                                Some(0x0000),
+                                ctx.bytes_in(),
+                                ctx.bytes_out(),
+                            );
+                            break;
+                        }
+                        ErrorHandlerAction::AbortAndStop => {
+                            request_instrumentation.complete(
+                                DimseOutcome::Aborted,
+                                ctx.response_status(),
+                                ctx.bytes_in().saturating_sub(request_start_bytes_in),
+                                ctx.bytes_out().saturating_sub(request_start_bytes_out),
+                            );
+                            instrumentation.log_complete(
+                                "aborted",
+                                None,
+                                ctx.bytes_in(),
+                                ctx.bytes_out(),
+                            );
+                            let association = ctx.into_association();
+                            let _ = association.abort();
+                            return Err(error);
+                        }
                     }
-                },
+                }
             }
         }
 

@@ -10,6 +10,7 @@ dicom-encoding = "0.9.0"
 dicom-object = "0.9.0"
 dicom-transfer-syntax-registry = "0.9.0"
 dicom-ul = "0.9.0"
+opentelemetry.workspace = true
 tempfile = "3.23.0"
 thiserror = "2.0.18"
 tokio = { version = "1.50.0", features = ["fs", "io-util", "rt"] }

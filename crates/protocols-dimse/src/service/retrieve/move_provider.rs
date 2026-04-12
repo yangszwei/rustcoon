@@ -7,6 +7,7 @@ use rustcoon_ul::OutboundAssociationRequest;
 
 use crate::context::AssociationContext;
 use crate::error::DimseError;
+use crate::instrumentation::{DimseErrorClass, record_suboperation};
 use crate::service::retrieve::common::{
     StoreSubOperationStatus, block_on_retrieve, build_retrieve_request, read_identifier_data_set,
     send_store_sub_operation,
@@ -39,6 +40,7 @@ impl CMoveServiceProvider {
 impl ServiceClassProvider for CMoveServiceProvider {
     fn handle(&self, ctx: &mut AssociationContext) -> Result<(), DimseError> {
         let request = CMoveRequest::from_command(&ctx.read_command()?)?;
+        tracing::debug!(stage = "validate", "C-MOVE request validated");
 
         let Some(model) = retrieve_model_for_move_sop_class_uid(&request.affected_sop_class_uid)
         else {
@@ -50,6 +52,11 @@ impl ServiceClassProvider for CMoveServiceProvider {
                 request.presentation_context_id,
                 &response.to_command_object(),
             )?;
+            ctx.record_response_status(CMoveStatus::IdentifierDoesNotMatchSopClass.code());
+            ctx.record_response_error_class(DimseErrorClass::new(
+                "service",
+                "unsupported_sop_class",
+            ));
             return Ok(());
         };
 
@@ -58,7 +65,10 @@ impl ServiceClassProvider for CMoveServiceProvider {
             request.presentation_context_id,
             &request.affected_sop_class_uid,
         ) {
-            Ok(identifier) => identifier,
+            Ok(identifier) => {
+                tracing::debug!(stage = "identifier_decoded", "C-MOVE identifier decoded");
+                identifier
+            }
             Err(_) => {
                 let response = CMoveResponse::for_request(&request, CMoveStatus::UnableToProcess)
                     .with_error_comment("failed to decode C-MOVE identifier");
@@ -66,6 +76,8 @@ impl ServiceClassProvider for CMoveServiceProvider {
                     request.presentation_context_id,
                     &response.to_command_object(),
                 )?;
+                ctx.record_response_status(CMoveStatus::UnableToProcess.code());
+                ctx.record_response_error_class(DimseErrorClass::new("service", "invalid_dataset"));
                 return Ok(());
             }
         };
@@ -85,17 +97,36 @@ impl ServiceClassProvider for CMoveServiceProvider {
                     request.presentation_context_id,
                     &response.to_command_object(),
                 )?;
+                ctx.record_response_status(CMoveStatus::IdentifierDoesNotMatchSopClass.code());
+                ctx.record_response_error_class(DimseErrorClass::new("service", "invalid_dataset"));
                 return Ok(());
             }
         };
 
+        tracing::debug!(
+            stage = "backend_call",
+            backend = "retrieve",
+            "C-MOVE retrieve plan started"
+        );
         let plan = block_on_retrieve(self.retrieve.plan(app_request));
         let response = match plan {
             Ok(plan) if plan.total_suboperations == 0 => {
+                tracing::debug!(
+                    stage = "backend_complete",
+                    backend = "retrieve",
+                    suboperations = 0_u64,
+                    "C-MOVE retrieve plan completed"
+                );
                 CMoveResponse::for_request(&request, CMoveStatus::Success)
                     .with_suboperation_counts(0, 0, 0, 0)
             }
             Ok(plan) => {
+                tracing::debug!(
+                    stage = "backend_complete",
+                    backend = "retrieve",
+                    suboperations = plan.total_suboperations as u64,
+                    "C-MOVE retrieve plan completed"
+                );
                 let Some(route_context) = ctx.route().cloned() else {
                     let response =
                         CMoveResponse::for_request(&request, CMoveStatus::UnableToProcess)
@@ -104,6 +135,11 @@ impl ServiceClassProvider for CMoveServiceProvider {
                         request.presentation_context_id,
                         &response.to_command_object(),
                     )?;
+                    ctx.record_response_status(CMoveStatus::UnableToProcess.code());
+                    ctx.record_response_error_class(DimseErrorClass::new(
+                        "service",
+                        "unable_to_process",
+                    ));
                     return Ok(());
                 };
                 let move_destination = match request.move_destination.parse::<AeTitle>() {
@@ -118,6 +154,11 @@ impl ServiceClassProvider for CMoveServiceProvider {
                             request.presentation_context_id,
                             &response.to_command_object(),
                         )?;
+                        ctx.record_response_status(CMoveStatus::MoveDestinationUnknown.code());
+                        ctx.record_response_error_class(DimseErrorClass::new(
+                            "service",
+                            "invalid_ae_title",
+                        ));
                         return Ok(());
                     }
                 };
@@ -131,6 +172,11 @@ impl ServiceClassProvider for CMoveServiceProvider {
                         request.presentation_context_id,
                         &response.to_command_object(),
                     )?;
+                    ctx.record_response_status(CMoveStatus::MoveDestinationUnknown.code());
+                    ctx.record_response_error_class(DimseErrorClass::new(
+                        "service",
+                        "unknown_move_destination",
+                    ));
                     return Ok(());
                 }
                 let route = match self
@@ -148,6 +194,11 @@ impl ServiceClassProvider for CMoveServiceProvider {
                             request.presentation_context_id,
                             &response.to_command_object(),
                         )?;
+                        ctx.record_response_status(CMoveStatus::MoveDestinationUnknown.code());
+                        ctx.record_response_error_class(DimseErrorClass::new(
+                            "service",
+                            "unknown_move_destination",
+                        ));
                         return Ok(());
                     }
                 };
@@ -172,6 +223,11 @@ impl ServiceClassProvider for CMoveServiceProvider {
                             request.presentation_context_id,
                             &response.to_command_object(),
                         )?;
+                        ctx.record_response_status(CMoveStatus::MoveDestinationUnknown.code());
+                        ctx.record_response_error_class(DimseErrorClass::new(
+                            "ul",
+                            "association_rejected",
+                        ));
                         return Ok(());
                     }
                 };
@@ -196,10 +252,17 @@ impl ServiceClassProvider for CMoveServiceProvider {
                         Some((move_originator_ae_title.as_str(), request.message_id)),
                     )? {
                         StoreSubOperationStatus::Completed => {
+                            record_suboperation("c_move_store", "completed");
                             completed = completed.saturating_add(1)
                         }
-                        StoreSubOperationStatus::Failed => failed = failed.saturating_add(1),
-                        StoreSubOperationStatus::Warning => warning = warning.saturating_add(1),
+                        StoreSubOperationStatus::Failed => {
+                            record_suboperation("c_move_store", "failed");
+                            failed = failed.saturating_add(1)
+                        }
+                        StoreSubOperationStatus::Warning => {
+                            record_suboperation("c_move_store", "warning");
+                            warning = warning.saturating_add(1)
+                        }
                     }
 
                     let done = completed.saturating_add(failed).saturating_add(warning);
@@ -223,13 +286,33 @@ impl ServiceClassProvider for CMoveServiceProvider {
                 CMoveResponse::for_request(&request, status)
                     .with_suboperation_counts(0, completed, failed, warning)
             }
-            Err(error) => map_retrieve_error_to_move_response(&request, error),
+            Err(error) => {
+                tracing::warn!(
+                    stage = "backend_failure",
+                    backend = "retrieve",
+                    error = %error,
+                    "C-MOVE retrieve plan failed"
+                );
+                let response = map_retrieve_error_to_move_response(&request, error);
+                ctx.record_response_error_class(c_move_status_error_class(response.status));
+                response
+            }
         };
 
+        let status = response.status.code();
+        if !matches!(response.status, CMoveStatus::Success | CMoveStatus::Pending) {
+            ctx.record_response_error_class(c_move_status_error_class(response.status));
+        }
         ctx.send_command_object(
             request.presentation_context_id,
             &response.to_command_object(),
         )?;
+        ctx.record_response_status(status);
+        tracing::debug!(
+            stage = "response",
+            status = format!("0x{status:04X}"),
+            "C-MOVE response sent"
+        );
         Ok(())
     }
 }
@@ -241,6 +324,21 @@ impl DescribedServiceClassProvider for CMoveServiceProvider {
             ServiceBinding::new(CommandField::CMoveRq, PATIENT_ROOT_MOVE_SOP_CLASS_UID),
         ];
         &BINDINGS
+    }
+}
+
+fn c_move_status_error_class(status: CMoveStatus) -> DimseErrorClass {
+    match status {
+        CMoveStatus::Pending | CMoveStatus::Success => DimseErrorClass::new("service", "unknown"),
+        CMoveStatus::Warning => DimseErrorClass::new("service", "unable_to_process"),
+        CMoveStatus::MoveDestinationUnknown => {
+            DimseErrorClass::new("service", "unknown_move_destination")
+        }
+        CMoveStatus::OutOfResources => DimseErrorClass::new("backend", "out_of_resources"),
+        CMoveStatus::IdentifierDoesNotMatchSopClass => {
+            DimseErrorClass::new("service", "invalid_dataset")
+        }
+        CMoveStatus::UnableToProcess => DimseErrorClass::new("service", "unable_to_process"),
     }
 }
 

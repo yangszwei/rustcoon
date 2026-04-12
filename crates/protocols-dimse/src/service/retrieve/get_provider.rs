@@ -5,6 +5,7 @@ use rustcoon_retrieve::{RetrieveError, RetrieveQueryModel, RetrieveService};
 
 use crate::context::AssociationContext;
 use crate::error::DimseError;
+use crate::instrumentation::{DimseErrorClass, record_suboperation};
 use crate::service::retrieve::common::{
     StoreSubOperationStatus, block_on_retrieve, build_retrieve_request, read_identifier_data_set,
     send_store_sub_operation,
@@ -30,6 +31,7 @@ impl CGetServiceProvider {
 impl ServiceClassProvider for CGetServiceProvider {
     fn handle(&self, ctx: &mut AssociationContext) -> Result<(), DimseError> {
         let request = CGetRequest::from_command(&ctx.read_command()?)?;
+        tracing::debug!(stage = "validate", "C-GET request validated");
 
         let Some(model) = retrieve_model_for_get_sop_class_uid(&request.affected_sop_class_uid)
         else {
@@ -41,6 +43,11 @@ impl ServiceClassProvider for CGetServiceProvider {
                 request.presentation_context_id,
                 &response.to_command_object(),
             )?;
+            ctx.record_response_status(CGetStatus::IdentifierDoesNotMatchSopClass.code());
+            ctx.record_response_error_class(DimseErrorClass::new(
+                "service",
+                "unsupported_sop_class",
+            ));
             return Ok(());
         };
 
@@ -49,7 +56,10 @@ impl ServiceClassProvider for CGetServiceProvider {
             request.presentation_context_id,
             &request.affected_sop_class_uid,
         ) {
-            Ok(identifier) => identifier,
+            Ok(identifier) => {
+                tracing::debug!(stage = "identifier_decoded", "C-GET identifier decoded");
+                identifier
+            }
             Err(_) => {
                 let response = CGetResponse::for_request(&request, CGetStatus::UnableToProcess)
                     .with_error_comment("failed to decode C-GET identifier");
@@ -57,6 +67,8 @@ impl ServiceClassProvider for CGetServiceProvider {
                     request.presentation_context_id,
                     &response.to_command_object(),
                 )?;
+                ctx.record_response_status(CGetStatus::UnableToProcess.code());
+                ctx.record_response_error_class(DimseErrorClass::new("service", "invalid_dataset"));
                 return Ok(());
             }
         };
@@ -74,17 +86,36 @@ impl ServiceClassProvider for CGetServiceProvider {
                     request.presentation_context_id,
                     &response.to_command_object(),
                 )?;
+                ctx.record_response_status(CGetStatus::IdentifierDoesNotMatchSopClass.code());
+                ctx.record_response_error_class(DimseErrorClass::new("service", "invalid_dataset"));
                 return Ok(());
             }
         };
 
+        tracing::debug!(
+            stage = "backend_call",
+            backend = "retrieve",
+            "C-GET retrieve plan started"
+        );
         let plan = block_on_retrieve(self.retrieve.plan(app_request));
         let response = match plan {
             Ok(plan) if plan.total_suboperations == 0 => {
+                tracing::debug!(
+                    stage = "backend_complete",
+                    backend = "retrieve",
+                    suboperations = 0_u64,
+                    "C-GET retrieve plan completed"
+                );
                 CGetResponse::for_request(&request, CGetStatus::Success)
                     .with_suboperation_counts(0, 0, 0, 0)
             }
             Ok(plan) => {
+                tracing::debug!(
+                    stage = "backend_complete",
+                    backend = "retrieve",
+                    suboperations = plan.total_suboperations as u64,
+                    "C-GET retrieve plan completed"
+                );
                 let mut completed = 0_u16;
                 let mut failed = 0_u16;
                 let mut warning = 0_u16;
@@ -100,10 +131,17 @@ impl ServiceClassProvider for CGetServiceProvider {
                         None,
                     )? {
                         StoreSubOperationStatus::Completed => {
+                            record_suboperation("c_get_store", "completed");
                             completed = completed.saturating_add(1)
                         }
-                        StoreSubOperationStatus::Failed => failed = failed.saturating_add(1),
-                        StoreSubOperationStatus::Warning => warning = warning.saturating_add(1),
+                        StoreSubOperationStatus::Failed => {
+                            record_suboperation("c_get_store", "failed");
+                            failed = failed.saturating_add(1)
+                        }
+                        StoreSubOperationStatus::Warning => {
+                            record_suboperation("c_get_store", "warning");
+                            warning = warning.saturating_add(1)
+                        }
                     }
 
                     let done = completed.saturating_add(failed).saturating_add(warning);
@@ -126,13 +164,33 @@ impl ServiceClassProvider for CGetServiceProvider {
                 CGetResponse::for_request(&request, status)
                     .with_suboperation_counts(0, completed, failed, warning)
             }
-            Err(error) => map_retrieve_error_to_get_response(&request, error),
+            Err(error) => {
+                tracing::warn!(
+                    stage = "backend_failure",
+                    backend = "retrieve",
+                    error = %error,
+                    "C-GET retrieve plan failed"
+                );
+                let response = map_retrieve_error_to_get_response(&request, error);
+                ctx.record_response_error_class(c_get_status_error_class(response.status));
+                response
+            }
         };
 
+        let status = response.status.code();
+        if !matches!(response.status, CGetStatus::Success | CGetStatus::Pending) {
+            ctx.record_response_error_class(c_get_status_error_class(response.status));
+        }
         ctx.send_command_object(
             request.presentation_context_id,
             &response.to_command_object(),
         )?;
+        ctx.record_response_status(status);
+        tracing::debug!(
+            stage = "response",
+            status = format!("0x{status:04X}"),
+            "C-GET response sent"
+        );
         Ok(())
     }
 }
@@ -144,6 +202,18 @@ impl DescribedServiceClassProvider for CGetServiceProvider {
             ServiceBinding::new(CommandField::CGetRq, PATIENT_ROOT_GET_SOP_CLASS_UID),
         ];
         &BINDINGS
+    }
+}
+
+fn c_get_status_error_class(status: CGetStatus) -> DimseErrorClass {
+    match status {
+        CGetStatus::Pending | CGetStatus::Success => DimseErrorClass::new("service", "unknown"),
+        CGetStatus::Warning => DimseErrorClass::new("service", "unable_to_process"),
+        CGetStatus::OutOfResources => DimseErrorClass::new("backend", "out_of_resources"),
+        CGetStatus::IdentifierDoesNotMatchSopClass => {
+            DimseErrorClass::new("service", "invalid_dataset")
+        }
+        CGetStatus::UnableToProcess => DimseErrorClass::new("service", "unable_to_process"),
     }
 }
 
