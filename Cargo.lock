@@ -1889,6 +1889,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustcoon-derive"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "rustcoon-dicom"
 version = "0.1.0"
 dependencies = [
