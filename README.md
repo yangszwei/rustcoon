@@ -10,6 +10,14 @@ You can run the monolith server with:
 cargo run -p rustcoon
 ```
 
+## Configuration
+
+The monolith binary runs with built-in defaults, so no configuration file is
+required. Optional overrides can be provided through local TOML files or
+`RUSTCOON__...` environment variables.
+
+See [config/](./config) for example configuration.
+
 ## License
 
 Licensed under the terms of the [LICENSE](LICENSE) file.
