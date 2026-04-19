@@ -5,4 +5,5 @@ edition.workspace = true
 
 [dependencies]
 rustcoon-platform-config = { path = "../platform-config" }
+rustcoon-platform-telemetry = { path = "../platform-telemetry" }
 thiserror = "2.0.18"

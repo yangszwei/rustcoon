@@ -817,6 +817,7 @@ name = "rustcoon-platform-orchestration"
 version = "0.1.0"
 dependencies = [
  "rustcoon-platform-config",
+ "rustcoon-platform-telemetry",
  "thiserror",
 ]
 
