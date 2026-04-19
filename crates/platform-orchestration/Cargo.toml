@@ -1,0 +1,8 @@
+[package]
+name = "rustcoon-platform-orchestration"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+rustcoon-platform-config = { path = "../platform-config" }
+thiserror = "2.0.18"
