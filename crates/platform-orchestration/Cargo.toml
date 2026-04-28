@@ -7,5 +7,6 @@ edition.workspace = true
 rustcoon-platform-config = { path = "../platform-config" }
 rustcoon-platform-runtime = { path = "../platform-runtime" }
 rustcoon-platform-telemetry = { path = "../platform-telemetry" }
+rustcoon-service-application-entity-registry = { path = "../service-application-entity-registry" }
 thiserror = "2.0.18"
 tokio = { version = "1.52.1", features = ["signal"] }

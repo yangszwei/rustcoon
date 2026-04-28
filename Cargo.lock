@@ -829,6 +829,7 @@ dependencies = [
  "rustcoon-platform-config",
  "rustcoon-platform-runtime",
  "rustcoon-platform-telemetry",
+ "rustcoon-service-application-entity-registry",
  "thiserror",
  "tokio",
 ]
